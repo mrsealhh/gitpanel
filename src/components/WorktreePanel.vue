@@ -5,10 +5,23 @@ import IconButton from './IconButton.vue'
 import Icon from './Icon.vue'
 import { relativeTime } from '../utils/time'
 
-const emit = defineEmits<{ (e: 'create'): void; (e: 'open', path: string): void }>()
+const emit = defineEmits<{
+  (e: 'create'): void
+  (e: 'open', path: string): void
+  (e: 'set-agent', path: string): void
+}>()
 const repo = useRepoStore()
 
 onMounted(() => repo.loadWorktrees())
+
+function metaOf(p: string) {
+  return repo.worktreeMeta[p]
+}
+
+function lastActive(wt: { path: string; lastCommit: number }) {
+  const m = metaOf(wt.path)
+  return (m?.lastUsedAt || wt.lastCommit || 0) / 1000
+}
 
 const totalDirty = computed(() => repo.worktrees.reduce((n, w) => n + w.dirty, 0))
 
@@ -60,20 +73,41 @@ async function remove(wt: { path: string; dirty: number; isCurrent: boolean }) {
         <div class="mt-0.5 truncate font-mono text-[10px] t3" :title="wt.path">{{ wt.path }}</div>
 
         <div class="mt-0.5 flex items-center gap-2 text-[10px] t3">
+          <span
+            v-if="metaOf(wt.path)?.agent"
+            class="rounded px-1"
+            :style="{ background: 'var(--accent-weak)', color: 'var(--accent)' }"
+            :title="`由 ${metaOf(wt.path)?.agent} 使用`"
+          >
+            {{ metaOf(wt.path)?.agent }}
+          </span>
           <span v-if="wt.dirty" style="color: var(--badge-tag-fg)">{{ wt.dirty }} 处改动</span>
           <span v-else>干净</span>
           <span v-if="wt.ahead" style="color: var(--accent)">↑{{ wt.ahead }}</span>
           <span v-if="wt.behind" style="color: var(--accent)">↓{{ wt.behind }}</span>
-          <span v-if="wt.aiHints.length" class="rounded px-1"
-            :style="{ background: 'var(--panel-3)' }" :title="wt.aiHints.join(', ')">AI 配置</span>
-          <span class="ml-auto">{{ wt.lastCommit ? relativeTime(wt.lastCommit) : '—' }}</span>
+          <span
+            v-if="wt.aiHints.length"
+            class="rounded px-1"
+            :style="{ background: 'var(--panel-3)' }"
+            :title="wt.aiHints.join(', ')"
+          >
+            AI 配置
+          </span>
+          <span class="ml-auto">{{ wt.lastCommit ? relativeTime(lastActive(wt)) : '—' }}</span>
         </div>
 
         <div class="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100">
           <button v-if="!wt.isCurrent" class="btn px-1.5 py-0 text-[10px]" @click="emit('open', wt.path)">打开</button>
           <button class="btn px-1.5 py-0 text-[10px]" @click="copyPath(wt.path)">复制路径</button>
-          <button v-if="!wt.isCurrent" class="btn px-1.5 py-0 text-[10px]" style="color: #f87171"
-            @click="remove(wt)">移除</button>
+          <button class="btn px-1.5 py-0 text-[10px]" @click="emit('set-agent', wt.path)">标记 Agent</button>
+          <button
+            v-if="!wt.isCurrent"
+            class="btn px-1.5 py-0 text-[10px]"
+            style="color: #f87171"
+            @click="remove(wt)"
+          >
+            移除
+          </button>
         </div>
       </div>
     </div>

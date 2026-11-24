@@ -755,6 +755,87 @@ export async function repoHealth(repo) {
   }
 }
 
+/* ────────────────────────── 工作树元数据 / 多仓库看板 ────────────────────────── */
+
+function metaFile(repo) {
+  return path.join(repo, '.gitpanel', 'worktree-meta.json')
+}
+
+export async function worktreeMetaList(repo) {
+  try {
+    return { meta: JSON.parse(fs.readFileSync(metaFile(repo), 'utf8')) }
+  } catch {
+    return { meta: {} }
+  }
+}
+
+export async function worktreeMetaSet(repo, wtPath, agent, note) {
+  const file = metaFile(repo)
+  let all = {}
+  try {
+    all = JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    all = {}
+  }
+  const key = String(wtPath).replace(/\\/g, '/')
+  const prev = all[key] || {}
+  const now = Date.now()
+  all[key] = {
+    agent: agent ?? prev.agent ?? '',
+    note: note ?? prev.note ?? '',
+    createdAt: prev.createdAt ?? now,
+    lastUsedAt: now,
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(all, null, 2), 'utf8')
+  return { ok: true, meta: all }
+}
+
+export async function worktreeMetaTouch(repo, wtPath) {
+  return worktreeMetaSet(repo, wtPath, undefined, undefined)
+}
+
+/** 多仓库看板：把给定的仓库路径补上分支/漂移/脏文件/工作树数 */
+export async function reposOverview(paths) {
+  const list = Array.isArray(paths) ? paths.slice(0, 20) : []
+  const out = await Promise.all(
+    list.map(async (p) => {
+      const name = String(p).split(/[\\/]/).filter(Boolean).pop() || String(p)
+      const base = { path: p, name, exists: false, branch: '', ahead: 0, behind: 0, dirty: 0, lastCommit: 0, worktrees: 0, error: null }
+      if (!fs.existsSync(p)) return { ...base, error: '目录不存在' }
+      try {
+        const st = await worktreeStatus(p)
+        const git = makeGit(p)
+        let last = 0
+        try {
+          last = Number((await git(['reflog', '--format=%ct', '-n', '1'])).trim()) || 0
+        } catch {
+          last = 0
+        }
+        let wts = 1
+        try {
+          wts = (await listWorktrees(p)).worktrees.length
+        } catch {
+          wts = 1
+        }
+        return {
+          ...base,
+          exists: true,
+          branch: st.branch,
+          ahead: st.ahead,
+          behind: st.behind,
+          dirty: st.staged.length + st.unstaged.length + st.untracked.length + st.conflicted.length,
+          lastCommit: last,
+          worktrees: wts,
+        }
+      } catch (e) {
+        return { ...base, exists: true, error: String(e.message || e) }
+      }
+    }),
+  )
+  return { repos: out }
+}
+
 /* ────────────────────────── 交互式 rebase ────────────────────────── */
 
 const SAFE_ACTION = new Set(['pick', 'reword', 'edit', 'squash', 'fixup', 'drop'])

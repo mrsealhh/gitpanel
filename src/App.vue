@@ -8,8 +8,10 @@ import ContextMenu from './components/ContextMenu.vue'
 import DetailPanel from './components/DetailPanel.vue'
 import DiffView from './components/DiffView.vue'
 import BlameModal from './components/BlameModal.vue'
+import DashboardModal from './components/DashboardModal.vue'
 import FileHistoryModal from './components/FileHistoryModal.vue'
 import HealthModal from './components/HealthModal.vue'
+import WorktreeDialog from './components/WorktreeDialog.vue'
 import Icon from './components/Icon.vue'
 import IconButton from './components/IconButton.vue'
 import InputDialog from './components/InputDialog.vue'
@@ -51,6 +53,8 @@ const showPalette = ref(false)
 const showSettings = ref(false)
 const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees'>('branches')
 const maximized = ref(false)
+const showWorktreeDialog = ref(false)
+const showDashboard = ref(false)
 
 interface MenuSpec {
   x: number
@@ -144,6 +148,8 @@ function onKey(e: KeyboardEvent) {
     else if (repo.fileHistoryFile) repo.closeFileHistory()
     else if (repo.blameFile) repo.closeBlame()
     else if (repo.health) repo.closeHealth()
+    else if (showDashboard.value) showDashboard.value = false
+    else if (showWorktreeDialog.value) showWorktreeDialog.value = false
     else if (repo.commandOutput) repo.closeCommandOutput()
     else if (repo.stashDiff) repo.closeStashDiff()
     else if (repo.diffFile) repo.closeDiff()
@@ -315,22 +321,25 @@ function openCreateStash() {
 
 /** 为 AI 并行会话开一个独立工作副本 */
 function openCreateWorktree() {
-  const baseName = repo.info?.name || 'repo'
-  const parent = (repo.path || '').replace(/[\\/][^\\/]+$/, '')
+  showWorktreeDialog.value = true
+}
+
+/** 给工作树打 Agent 标记 */
+function onSetWorktreeAgent(wtPath: string) {
   prompt.value = {
-    title: '新建工作树',
-    label: '新分支名（会从当前 HEAD 拉出并检出到新目录）',
-    placeholder: 'feat/ai-session-1',
-    secondLabel: '目录（留空会用 ../<仓库名>-worktrees/<分支名>）',
-    secondPlaceholder: `${parent}\\${baseName}-worktrees\\feat-ai-session-1`,
-    confirmText: '创建工作树',
-    onSubmit: (branch, dir) => {
-      const target =
-        dir.trim() ||
-        `${parent}\\${baseName}-worktrees\\${branch.replace(/[\\/]/g, '-')}`
-      return repo.addWorktree({ target, branch, newBranch: true, base: 'HEAD' })
-    },
+    title: '标记工作树的 Agent',
+    label: '谁在用它（claude / codex / cursor …）',
+    value: repo.worktreeMeta[wtPath]?.agent ?? '',
+    placeholder: 'claude',
+    confirmText: '保存标记',
+    onSubmit: (agent) => repo.setWorktreeAgent(wtPath, agent),
   }
+}
+
+/** 打开工作树：先记一次「最后活动」，再切仓库 */
+async function openWorktree(path: string) {
+  await repo.touchWorktree(path)
+  openPath(path)
 }
 
 async function submitPrompt(value: string, second: string) {
@@ -506,7 +515,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           v-else-if="leftTab === 'worktrees'"
           class="min-h-0 flex-1"
           @create="openCreateWorktree"
-          @open="openPath"
+          @open="openWorktree"
+          @set-agent="onSetWorktreeAgent"
         />
         <SnapshotPanel v-else class="min-h-0 flex-1" />
       </div>
@@ -561,6 +571,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           </div>
         </div>
 
+        <div class="mt-3 flex items-center justify-center gap-2">
+          <button class="btn" @click="showDashboard = true">多仓库看板</button>
+          <button class="btn" @click="showPalette = true">命令面板</button>
+        </div>
+
         <div class="mt-6 text-center text-[11px] t3">
           Ctrl+K 命令面板 · Ctrl+, 设置 · Ctrl+F 搜索 · v{{ APP_VERSION }}
         </div>
@@ -603,7 +618,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     <FileHistoryModal />
     <BlameModal />
     <HealthModal />
-    <CommandPalette v-if="showPalette" @close="showPalette = false" @settings="showSettings = true" />
+    <DashboardModal v-if="showDashboard" @close="showDashboard = false" @open="openPath" />
+    <WorktreeDialog v-if="showWorktreeDialog" @close="showWorktreeDialog = false" />
+    <CommandPalette
+      v-if="showPalette"
+      @close="showPalette = false"
+      @settings="showSettings = true"
+      @dashboard="showDashboard = true"
+    />
     <SettingsDialog v-if="showSettings" @close="showSettings = false" />
     <ContextMenu
       v-if="menu"

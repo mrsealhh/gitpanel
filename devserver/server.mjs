@@ -393,7 +393,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/health') return send(res, 200, { ok: true, port: PORT })
 
     const body = req.method === 'POST' ? await readBody(req) : {}
-    if (!body.path) return send(res, 400, { error: 'path required' })
+    if (!body.path && url.pathname !== '/api/repos-overview') {
+      return send(res, 400, { error: 'path required' })
+    }
 
     if (url.pathname === '/api/open') return send(res, 200, await openRepo(body.path))
     if (url.pathname === '/api/graph') return send(res, 200, await graphPage(body.path, body))
@@ -495,6 +497,20 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/repo-health') {
       return send(res, 200, await ops.repoHealth(body.path))
+    }
+
+    // ── 工作树元数据 / 多仓库看板 ──
+    if (url.pathname === '/api/worktree-meta-list') {
+      return send(res, 200, await ops.worktreeMetaList(body.path))
+    }
+    if (url.pathname === '/api/worktree-meta-set') {
+      return send(res, 200, await ops.worktreeMetaSet(body.path, body.wtPath, body.agent, body.note))
+    }
+    if (url.pathname === '/api/worktree-meta-touch') {
+      return send(res, 200, await ops.worktreeMetaTouch(body.path, body.wtPath))
+    }
+    if (url.pathname === '/api/repos-overview') {
+      return send(res, 200, await ops.reposOverview(body.paths))
     }
 
     // ── 交互式 rebase ──

@@ -4,7 +4,11 @@ import { useRepoStore } from '../stores/repo'
 import { THEME_LABELS, useSettingsStore } from '../stores/settings'
 import type { ThemeId } from '../stores/settings'
 
-const emit = defineEmits<{ (e: 'close'): void; (e: 'settings'): void }>()
+const emit = defineEmits<{
+  (e: 'close'): void
+  (e: 'settings'): void
+  (e: 'dashboard'): void
+}>()
 
 const repo = useRepoStore()
 const settings = useSettingsStore()
@@ -66,6 +70,13 @@ const items = computed<Item[]>(() => {
       title: '刷新工作树列表',
       group: '仓库',
       run: () => repo.loadWorktrees(),
+    },
+    {
+      id: 'dashboard',
+      title: '多仓库看板',
+      hint: '所有项目的漂移 / 脏改动',
+      group: '仓库',
+      run: () => emit('dashboard'),
     },
     {
       id: 'health',

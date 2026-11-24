@@ -258,7 +258,6 @@ export interface WorktreeInfo {
 }
 
 /* ── 文件历史 / Blame / 体检 ── */
-
 export interface FileHistoryEntry {
   oid: string
   short: string
@@ -295,4 +294,26 @@ export interface RepoHealth {
   files: number
   largeObjects: LargeObject[]
   suggestions: string[]
+}
+
+/* ── 工作树元数据 / 多仓库看板 ── */
+
+export interface WorktreeMeta {
+  agent: string
+  note: string
+  createdAt: number
+  lastUsedAt: number
+}
+
+export interface RepoOverview {
+  path: string
+  name: string
+  exists: boolean
+  branch: string
+  ahead: number
+  behind: number
+  dirty: number
+  lastCommit: number
+  worktrees: number
+  error?: string | null
 }

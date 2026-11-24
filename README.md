@@ -20,6 +20,10 @@
 |---|---|
 | ![rebase](docs/screenshot-rebase.png) | ![worktree](docs/screenshot-worktree.png) |
 
+| 新建工作树 | 多仓库看板 |
+|---|---|
+| ![worktree-dialog](docs/screenshot-worktree-dialog.png) | ![dashboard](docs/screenshot-dashboard.png) |
+
 | 仓库体检 |
 |---|
 | ![health](docs/screenshot-health.png) |
@@ -68,6 +72,10 @@
   变基遇到冲突或 edit 暂停时工作区顶部出现状态条（显示当前提交），解决后继续 / 跳过 / 中止
 - **工作树（worktree）**：一处查看所有并行工作副本——分支、脏文件数、ahead/behind、最近活动、
   是否带 AI 配置（AGENTS.md / CLAUDE.md / .cursor）；一键新建（自动拉分支）、打开、复制路径、移除、清理失效项
+- **工作树 ↔ AI 会话**：每个副本可标记由哪个 agent 使用（claude / codex / cursor…），
+  打开时自动刷新「最后活动」，并行跑多个会话时一眼看出谁在哪
+- **多仓库看板**：把最近打开的仓库拉成一张表——分支、漂移（↑/↓）、脏改动、工作树数、最后活动，
+  点一行直接切过去
 - **文件历史**：单文件提交历史（`--follow` 跟随重命名），点任意一条直接看该提交里这个文件的并排 Diff
 - **Blame**：逐行归属，相邻同一提交共用底色，悬停看作者与时间
 - **仓库体检**：`.git`/pack 体积、松散对象、垃圾对象、提交/分支/标签/文件数、历史最大对象与优化建议
@@ -287,6 +295,8 @@ layout synth : 188–283 ms   100000 rows, 223531 segments
 - [x] 一键/静默更新（minisign 签名 + GitHub Releases 自动发版）
 - [x] 交互式 rebase（拖拽重排 / squash / fixup / drop + 冲突与 edit 暂停续做）
 - [x] 工作树管理（并行副本一览 / 新建 / 移除 / 清理）
+- [x] 工作树 ↔ AI 会话标记（agent 标签 + 最后活动时间）
+- [x] 多仓库看板（漂移 / 脏改动 / 工作树数 / 最后活动）
 - [x] 文件历史 / Blame / 仓库体检
 - [ ] 交互式 rebase 的「暂停编辑」后一键 amend 提交
 - [ ] 工作树与 AI 会话的关联（记录每个副本对应哪个 agent）

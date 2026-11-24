@@ -20,12 +20,14 @@ import type {
   RemoteInfo,
   RepoHealth,
   RepoInfo,
+  RepoOverview,
   Snapshot,
   Stash,
   StashDiff,
   StatusFile,
   TagInfo,
   WorktreeInfo,
+  WorktreeMeta,
   WorktreeStatus,
 } from '../api/types'
 
@@ -99,6 +101,11 @@ export const useRepoStore = defineStore('repo', {
     // 工作树
     worktrees: [] as WorktreeInfo[],
     worktreesLoading: false,
+    worktreeMeta: {} as Record<string, WorktreeMeta>,
+
+    // 多仓库看板
+    overview: [] as RepoOverview[],
+    overviewLoading: false,
 
     // 文件历史 / Blame / 体检
     fileHistoryFile: '',
@@ -760,7 +767,12 @@ export const useRepoStore = defineStore('repo', {
       if (!this.path) return
       this.worktreesLoading = true
       try {
-        this.worktrees = (await api.worktrees(this.path)).worktrees
+        const [list, meta] = await Promise.all([
+          api.worktrees(this.path),
+          api.worktreeMetaList(this.path).catch(() => ({ meta: {} })),
+        ])
+        this.worktrees = list.worktrees
+        this.worktreeMeta = meta.meta || {}
       } catch (e) {
         this.worktrees = []
         this.notify('err', String((e as Error).message || e))
@@ -769,14 +781,59 @@ export const useRepoStore = defineStore('repo', {
       }
     },
 
-    async addWorktree(opts: { target: string; branch: string; newBranch: boolean; base?: string }) {
-      if (!this.path) return
+    async addWorktree(opts: {
+      target: string
+      branch: string
+      newBranch: boolean
+      base?: string
+      agent?: string
+    }): Promise<string | null> {
+      if (!this.path) return null
       try {
         const res = await api.addWorktree(this.path, opts)
+        if (opts.agent) await api.worktreeMetaSet(this.path, res.path, opts.agent).catch(() => null)
         this.notify('ok', `已创建工作树：${res.path}`)
         await this.loadWorktrees()
+        return res.path
       } catch (e) {
         this.notify('err', String((e as Error).message || e))
+        return null
+      }
+    },
+
+    /** 给某个工作树打上「由谁创建 / 由谁在用」的标记 */
+    async setWorktreeAgent(wtPath: string, agent: string) {
+      if (!this.path) return
+      try {
+        await api.worktreeMetaSet(this.path, wtPath, agent)
+        await this.loadWorktrees()
+        this.notify('ok', agent ? `已标记为 ${agent}` : '已清除标记')
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    /** 打开工作树时刷新最后活动时间 */
+    async touchWorktree(wtPath: string) {
+      if (!this.path) return
+      await api.worktreeMetaTouch(this.path, wtPath).catch(() => null)
+    },
+
+    async loadOverview() {
+      this.overviewLoading = true
+      try {
+        const recents = await recentList()
+        const paths = recents.map((r) => r.path)
+        if (!paths.length) {
+          this.overview = []
+          return
+        }
+        this.overview = (await api.reposOverview(paths)).repos
+      } catch (e) {
+        this.overview = []
+        this.notify('err', String((e as Error).message || e))
+      } finally {
+        this.overviewLoading = false
       }
     },
 

@@ -209,6 +209,13 @@ fn open_db(app: &AppHandle) -> Result<Connection> {
             name TEXT NOT NULL,
             opened_at INTEGER NOT NULL,
             pinned INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS worktree_meta (
+            path TEXT PRIMARY KEY,
+            agent TEXT NOT NULL DEFAULT '',
+            note TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            last_used_at INTEGER NOT NULL
         );",
     )?;
     Ok(conn)
@@ -269,6 +276,169 @@ fn recent_pin(path: String, pinned: bool, db: tauri::State<Db>) -> Result<(), St
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/* ─────────────── 工作树 ↔ AI 会话元数据 ─────────────── */
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorktreeMeta {
+    agent: String,
+    note: String,
+    created_at: i64,
+    last_used_at: i64,
+}
+
+#[tauri::command]
+fn worktree_meta_list(
+    db: tauri::State<Db>,
+) -> Result<std::collections::HashMap<String, WorktreeMeta>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT path, agent, note, created_at, last_used_at FROM worktree_meta")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                WorktreeMeta {
+                    agent: r.get(1)?,
+                    note: r.get(2)?,
+                    created_at: r.get(3)?,
+                    last_used_at: r.get(4)?,
+                },
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut map = std::collections::HashMap::new();
+    for row in rows {
+        let (path, meta) = row.map_err(|e| e.to_string())?;
+        map.insert(path, meta);
+    }
+    Ok(map)
+}
+
+#[tauri::command]
+fn worktree_meta_set(
+    path: String,
+    agent: String,
+    note: String,
+    db: tauri::State<Db>,
+) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let now = now_ms();
+    conn.execute(
+        "INSERT INTO worktree_meta (path, agent, note, created_at, last_used_at)
+         VALUES (?1, ?2, ?3, ?4, ?4)
+         ON CONFLICT(path) DO UPDATE SET agent = ?2, note = ?3",
+        rusqlite::params![path, agent, note, now],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 打开某个工作树时刷新「最后活动」
+#[tauri::command]
+fn worktree_meta_touch(path: String, db: tauri::State<Db>) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let now = now_ms();
+    conn.execute(
+        "INSERT INTO worktree_meta (path, agent, note, created_at, last_used_at)
+         VALUES (?1, '', '', ?2, ?2)
+         ON CONFLICT(path) DO UPDATE SET last_used_at = ?2",
+        rusqlite::params![path, now],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/* ─────────────── 多仓库看板 ─────────────── */
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepoOverview {
+    path: String,
+    name: String,
+    exists: bool,
+    branch: String,
+    ahead: u32,
+    behind: u32,
+    dirty: u32,
+    last_commit: i64,
+    worktrees: u32,
+    error: Option<String>,
+}
+
+#[tauri::command]
+fn repos_overview(paths: Vec<String>) -> Vec<RepoOverview> {
+    paths
+        .into_iter()
+        .take(20)
+        .map(|path| {
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+
+            if !std::path::Path::new(&path).exists() {
+                return RepoOverview {
+                    path,
+                    name,
+                    exists: false,
+                    branch: String::new(),
+                    ahead: 0,
+                    behind: 0,
+                    dirty: 0,
+                    last_commit: 0,
+                    worktrees: 0,
+                    error: Some("目录不存在".into()),
+                };
+            }
+
+            match Repo::open(&path) {
+                Ok(repo) => {
+                    let status = repo.worktree_status().ok();
+                    let last = repo
+                        .reflog(1)
+                        .ok()
+                        .and_then(|l| l.first().map(|e| e.time))
+                        .unwrap_or(0);
+                    let wt = repo.worktrees().map(|w| w.len() as u32).unwrap_or(1);
+                    RepoOverview {
+                        path,
+                        name,
+                        exists: true,
+                        branch: status.as_ref().map(|s| s.branch.clone()).unwrap_or_default(),
+                        ahead: status.as_ref().map(|s| s.ahead).unwrap_or(0),
+                        behind: status.as_ref().map(|s| s.behind).unwrap_or(0),
+                        dirty: status
+                            .as_ref()
+                            .map(|s| {
+                                (s.staged.len() + s.unstaged.len() + s.untracked.len() + s.conflicted.len())
+                                    as u32
+                            })
+                            .unwrap_or(0),
+                        last_commit: last,
+                        worktrees: wt,
+                        error: None,
+                    }
+                }
+                Err(e) => RepoOverview {
+                    path,
+                    name,
+                    exists: true,
+                    branch: String::new(),
+                    ahead: 0,
+                    behind: 0,
+                    dirty: 0,
+                    last_commit: 0,
+                    worktrees: 0,
+                    error: Some(e.to_string()),
+                },
+            }
+        })
+        .collect()
 }
 
 /* ───────────────────────── 桌面能力 ───────────────────────── */
@@ -378,7 +548,11 @@ fn main() {
             recent_list,
             recent_touch,
             recent_remove,
-            recent_pin
+            recent_pin,
+            worktree_meta_list,
+            worktree_meta_set,
+            worktree_meta_touch,
+            repos_overview
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitPanel");

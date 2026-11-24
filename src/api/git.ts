@@ -16,11 +16,13 @@ import type {
   RemoteInfo,
   RepoHealth,
   RepoInfo,
+  RepoOverview,
   SyncResult,
   Stash,
   StashDiff,
   TagInfo,
   WorktreeInfo,
+  WorktreeMeta,
   WorktreeStatus,
   Snapshot,
   ConflictDetail,
@@ -229,6 +231,23 @@ export const api = {
   /* ── 工作树 ── */
   worktrees(path: string): Promise<{ worktrees: WorktreeInfo[] }> {
     return post<{ worktrees: WorktreeInfo[] }>('/api/worktrees', { path })
+  },
+  worktreeMetaList(path: string): Promise<{ meta: Record<string, WorktreeMeta> }> {
+    return post<{ meta: Record<string, WorktreeMeta> }>('/api/worktree-meta-list', { path })
+  },
+  worktreeMetaSet(
+    path: string,
+    wtPath: string,
+    agent: string,
+    note = '',
+  ): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/worktree-meta-set', { path, wtPath, agent, note })
+  },
+  worktreeMetaTouch(path: string, wtPath: string): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/worktree-meta-touch', { path, wtPath })
+  },
+  reposOverview(paths: string[]): Promise<{ repos: RepoOverview[] }> {
+    return post<{ repos: RepoOverview[] }>('/api/repos-overview', { paths })
   },
   addWorktree(
     path: string,
