@@ -6,6 +6,10 @@ import type {
   PluginCommand,
   RemoteInfo,
   RepoInfo,
+  SyncResult,
+  WorktreeStatus,
+  Snapshot,
+  ConflictDetail,
 } from './types'
 
 /**
@@ -71,5 +75,60 @@ export const api = {
     from?: string,
   ): Promise<{ ok: boolean; branch: string }> {
     return post<{ ok: boolean; branch: string }>('/api/create-branch', { path, name, from })
+  },
+
+  /* ── 工作区 ── */
+  worktreeStatus(path: string): Promise<WorktreeStatus> {
+    return post<WorktreeStatus>('/api/worktree-status', { path })
+  },
+  worktreeDiff(path: string, file: string, staged: boolean): Promise<FileDiff> {
+    return post<FileDiff>('/api/worktree-diff', { path, file, staged })
+  },
+  stage(path: string, files: string[]): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/stage', { path, files })
+  },
+  unstage(path: string, files: string[]): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/unstage', { path, files })
+  },
+  discard(path: string, files: string[], untracked = false): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/discard', { path, files, untracked })
+  },
+  commitChanges(
+    path: string,
+    message: string,
+    amend = false,
+    addAll = false,
+  ): Promise<{ ok: boolean; oid: string; short: string; output: string }> {
+    return post('/api/commit-changes', { path, message, amend, addAll })
+  },
+
+  /* ── 同步 ── */
+  fetch(path: string): Promise<SyncResult> {
+    return post<SyncResult>('/api/fetch', { path })
+  },
+  pull(path: string): Promise<SyncResult> {
+    return post<SyncResult>('/api/pull', { path })
+  },
+  push(path: string, force = false): Promise<SyncResult> {
+    return post<SyncResult>('/api/push', { path, force })
+  },
+
+  /* ── 安全网 ── */
+  snapshots(path: string): Promise<{ snapshots: Snapshot[] }> {
+    return post<{ snapshots: Snapshot[] }>('/api/snapshots', { path })
+  },
+  restoreSnapshot(path: string, ref: string): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/restore-snapshot', { path, ref })
+  },
+
+  /* ── 冲突 ── */
+  conflict(path: string, file: string): Promise<ConflictDetail> {
+    return post<ConflictDetail>('/api/conflict', { path, file })
+  },
+  resolve(path: string, file: string, content: string): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/resolve', { path, file, content })
+  },
+  resolveSide(path: string, file: string, side: 'ours' | 'theirs'): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/resolve-side', { path, file, side })
   },
 }

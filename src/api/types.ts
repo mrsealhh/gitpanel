@@ -107,3 +107,60 @@ export interface RemoteInfo {
   /** 可点击的网页地址，如 https://github.com/owner/repo */
   web?: string
 }
+
+/* ── 工作区 ── */
+
+export interface StatusFile {
+  path: string
+  status: string
+  origPath?: string
+}
+
+export interface WorktreeStatus {
+  branch: string
+  oid: string
+  ahead: number
+  behind: number
+  staged: StatusFile[]
+  unstaged: StatusFile[]
+  untracked: StatusFile[]
+  conflicted: StatusFile[]
+  clean: boolean
+}
+
+export interface Snapshot {
+  ref: string
+  label: string
+  oid: string
+  short: string
+  time: number
+  subject: string
+}
+
+export interface SyncResult {
+  ok: boolean
+  output: string
+  snapshot?: string | null
+}
+
+/* ── 冲突 ── */
+
+export interface ConflictBlock {
+  type: 'text' | 'conflict'
+  text?: string
+  ours?: string
+  theirs?: string
+  base?: string | null
+  oursLabel?: string
+  theirsLabel?: string
+}
+
+export interface ConflictDetail {
+  path: string
+  base: string
+  ours: string
+  theirs: string
+  working: string
+  hasMarkers: boolean
+  blocks: ConflictBlock[]
+}

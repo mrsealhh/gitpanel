@@ -7,6 +7,8 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { layout } from './layout.mjs'
+import * as ops from './ops.mjs'
+import * as conflict from './conflict.mjs'
 
 const run = promisify(execFile)
 const PORT = Number(process.env.GITPANEL_PORT || 7717)
@@ -405,6 +407,46 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/checkout') return send(res, 200, await checkoutRef(body.path, body.ref))
     if (url.pathname === '/api/create-branch') {
       return send(res, 200, await createBranch(body.path, body.name, body.from))
+    }
+
+    // ── 工作区 / 写操作 / 安全网 / 冲突 ──
+    if (url.pathname === '/api/worktree-status') {
+      return send(res, 200, await ops.worktreeStatus(body.path))
+    }
+    if (url.pathname === '/api/worktree-diff') {
+      return send(res, 200, await ops.worktreeDiff(body.path, body.file, !!body.staged))
+    }
+    if (url.pathname === '/api/stage') {
+      return send(res, 200, await ops.stageFiles(body.path, body.files || []))
+    }
+    if (url.pathname === '/api/unstage') {
+      return send(res, 200, await ops.unstageFiles(body.path, body.files || []))
+    }
+    if (url.pathname === '/api/discard') {
+      return send(res, 200, await ops.discardFiles(body.path, body.files || [], !!body.untracked))
+    }
+    if (url.pathname === '/api/commit-changes') {
+      return send(
+        res,
+        200,
+        await ops.commitChanges(body.path, body.message, !!body.amend, !!body.addAll),
+      )
+    }
+    if (url.pathname === '/api/fetch') return send(res, 200, await ops.fetchRepo(body.path))
+    if (url.pathname === '/api/pull') return send(res, 200, await ops.pullRepo(body.path))
+    if (url.pathname === '/api/push') return send(res, 200, await ops.pushRepo(body.path, !!body.force))
+    if (url.pathname === '/api/snapshots') return send(res, 200, await ops.listSnapshots(body.path))
+    if (url.pathname === '/api/restore-snapshot') {
+      return send(res, 200, await ops.restoreSnapshot(body.path, body.ref))
+    }
+    if (url.pathname === '/api/conflict') {
+      return send(res, 200, await conflict.conflictDetail(body.path, body.file))
+    }
+    if (url.pathname === '/api/resolve') {
+      return send(res, 200, await conflict.resolveConflict(body.path, body.file, body.content ?? ''))
+    }
+    if (url.pathname === '/api/resolve-side') {
+      return send(res, 200, await conflict.resolveSide(body.path, body.file, body.side))
     }
 
     send(res, 404, { error: 'not found' })

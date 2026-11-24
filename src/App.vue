@@ -3,13 +3,16 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import CommandOutput from './components/CommandOutput.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import CommitList from './components/CommitList.vue'
+import ConflictResolver from './components/ConflictResolver.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DetailPanel from './components/DetailPanel.vue'
 import DiffView from './components/DiffView.vue'
 import InputDialog from './components/InputDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import SidePanel from './components/SidePanel.vue'
+import SnapshotPanel from './components/SnapshotPanel.vue'
 import StatusBar from './components/StatusBar.vue'
+import WorkingPanel from './components/WorkingPanel.vue'
 import type { CommitRow } from './api/types'
 import type { MenuItem } from './types/ui'
 import { useRepoStore } from './stores/repo'
@@ -24,10 +27,20 @@ const showPalette = ref(false)
 const showSettings = ref(false)
 const menu = ref<{ x: number; y: number; row: CommitRow; items: MenuItem[] } | null>(null)
 const branchDialog = ref<{ from: string } | null>(null)
+const leftTab = ref<'branches' | 'working' | 'snapshots'>('branches')
 
 async function open() {
   await repo.open(pathInput.value)
+  await repo.refreshStatus()
+  const s = repo.status
+  if (s && !s.clean) leftTab.value = 'working'
 }
+
+const changeCount = computed(() => {
+  const s = repo.status
+  if (!s) return 0
+  return s.staged.length + s.unstaged.length + s.untracked.length + s.conflicted.length
+})
 
 /* ── 命令/快捷键 ── */
 function onKey(e: KeyboardEvent) {
@@ -178,22 +191,62 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         <span class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] t3">⌕</span>
       </div>
 
-      <button class="btn ml-auto" title="命令面板 Ctrl+K" @click="showPalette = true">⌘ 命令</button>
-      <button class="btn" title="切换主题" @click="cycleTheme">{{ settings.themeLabel }}</button>
-      <button class="btn" title="设置 Ctrl+," @click="showSettings = true">设置</button>
+      <div class="ml-auto flex items-center gap-1.5">
+        <button class="btn" :disabled="!!repo.syncing" @click="repo.sync('fetch')">
+          {{ repo.syncing === 'fetch' ? 'Fetch…' : 'Fetch' }}
+        </button>
+        <button class="btn" :disabled="!!repo.syncing" @click="repo.sync('pull')">
+          Pull<span v-if="repo.status?.behind" class="ml-1" style="color: var(--accent)">↓{{ repo.status.behind }}</span>
+        </button>
+        <button class="btn" :disabled="!!repo.syncing" @click="repo.sync('push')">
+          Push<span v-if="repo.status?.ahead" class="ml-1" style="color: var(--accent)">↑{{ repo.status.ahead }}</span>
+        </button>
+        <button class="btn" title="命令面板 Ctrl+K" @click="showPalette = true">⌘ 命令</button>
+        <button class="btn" title="切换主题" @click="cycleTheme">{{ settings.themeLabel }}</button>
+        <button class="btn" title="设置 Ctrl+," @click="showSettings = true">设置</button>
+      </div>
 
       <span v-if="repo.loading" class="text-[11px] t3">加载中…</span>
       <span v-if="repo.error" class="max-w-[220px] truncate text-[11px] text-rose-400">{{ repo.error }}</span>
     </header>
 
     <main v-if="repo.info" class="flex min-h-0 flex-1">
-      <SidePanel
-        :refs="repo.info.refs"
-        :branch="repo.info.branch"
-        :tip="repo.tip"
-        :name="repo.info.name"
-        @filter="repo.setTip($event)"
-      />
+      <div
+        class="flex h-full w-[240px] shrink-0 flex-col"
+        :style="{ borderRight: '1px solid var(--border)' }"
+      >
+        <div class="flex shrink-0 items-center" :style="{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }">
+          <button
+            v-for="t in (['branches', 'working', 'snapshots'] as const)"
+            :key="t"
+            class="flex-1 px-2 py-1.5 text-[11px]"
+            :style="
+              leftTab === t
+                ? { color: 'var(--text)', boxShadow: 'inset 0 -2px 0 var(--accent)' }
+                : { color: 'var(--text-mute)' }
+            "
+            @click="leftTab = t; t === 'snapshots' && repo.loadSnapshots()"
+          >
+            {{ t === 'branches' ? '分支' : t === 'working' ? '工作区' : '安全网' }}
+            <span v-if="t === 'working' && changeCount" class="ml-0.5" :style="{ color: 'var(--accent)' }">{{ changeCount }}</span>
+          </button>
+        </div>
+        <SidePanel
+          v-if="leftTab === 'branches'"
+          class="min-h-0 flex-1"
+          :refs="repo.info.refs"
+          :branch="repo.info.branch"
+          :tip="repo.tip"
+          :name="repo.info.name"
+          @filter="repo.setTip($event)"
+        />
+        <WorkingPanel
+          v-else-if="leftTab === 'working'"
+          class="min-h-0 flex-1"
+          @conflict="repo.openConflict($event)"
+        />
+        <SnapshotPanel v-else class="min-h-0 flex-1" />
+      </div>
       <CommitList
         class="min-w-0 flex-1"
         :rows="repo.filteredRows"
@@ -232,6 +285,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     <StatusBar />
 
     <!-- 浮层 -->
+    <ConflictResolver v-if="repo.conflictFile" />
     <DiffView
       v-if="repo.diffFile"
       :file="repo.diffFile"

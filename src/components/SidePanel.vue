@@ -30,7 +30,7 @@ const open = ref<Record<string, boolean>>({ branch: true, remote: true, tag: fal
 </script>
 
 <template>
-  <aside class="flex h-full w-[220px] shrink-0 flex-col" :style="{ background: 'var(--panel)', borderRight: '1px solid var(--border)' }">
+  <aside class="flex h-full w-full flex-col" :style="{ background: 'var(--panel)' }">
     <div class="line-b px-3 py-2">
       <div class="truncate text-[13px] font-semibold t1">{{ name }}</div>
       <div class="mt-0.5 flex items-center gap-1.5 text-[11px] t3">

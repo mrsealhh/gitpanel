@@ -4,10 +4,14 @@ import type {
   CommandResult,
   CommitDetail,
   CommitRow,
+  ConflictDetail,
   FileDiff,
   PluginCommand,
   RemoteInfo,
   RepoInfo,
+  Snapshot,
+  StatusFile,
+  WorktreeStatus,
 } from '../api/types'
 
 const RECENT_KEY = 'gitpanel.recent'
@@ -52,6 +56,24 @@ export const useRepoStore = defineStore('repo', {
     notice: null as Notice | null,
     commandOutput: null as (CommandResult & { title: string }) | null,
     recent: loadRecent(),
+
+    // 工作区 / 提交 / 同步
+    status: null as WorktreeStatus | null,
+    statusLoading: false,
+    commitMessage: '',
+    amend: false,
+    syncing: '' as '' | 'fetch' | 'pull' | 'push',
+    syncOutput: '',
+
+    // 安全网
+    snapshots: [] as Snapshot[],
+    snapshotsLoading: false,
+
+    // 冲突
+    conflict: null as ConflictDetail | null,
+    conflictLoading: false,
+    conflictFile: '',
+    diffStaged: false,
   }),
 
   getters: {
@@ -243,6 +265,186 @@ export const useRepoStore = defineStore('repo', {
 
     closeCommandOutput() {
       this.commandOutput = null
+    },
+
+    /* ─────────────── 工作区 ─────────────── */
+
+    async refreshStatus() {
+      if (!this.path) return
+      this.statusLoading = true
+      try {
+        this.status = await api.worktreeStatus(this.path)
+      } catch (e) {
+        this.status = null
+        this.error = String((e as Error).message || e)
+      } finally {
+        this.statusLoading = false
+      }
+    },
+
+    async stage(files: StatusFile[] | string[]) {
+      if (!this.path || !files.length) return
+      const paths = files.map((f) => (typeof f === 'string' ? f : f.path))
+      await api.stage(this.path, paths)
+      await this.refreshStatus()
+      await this.reload()
+    },
+
+    async unstage(files: StatusFile[] | string[]) {
+      if (!this.path || !files.length) return
+      const paths = files.map((f) => (typeof f === 'string' ? f : f.path))
+      await api.unstage(this.path, paths)
+      await this.refreshStatus()
+    },
+
+    async discard(files: StatusFile[] | string[], untracked = false) {
+      if (!this.path || !files.length) return
+      const paths = files.map((f) => (typeof f === 'string' ? f : f.path))
+      try {
+        await api.discard(this.path, paths, untracked)
+        this.notify('ok', `已丢弃 ${paths.length} 个文件的改动（已自动打快照）`)
+        await this.refreshStatus()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async commitChanges() {
+      if (!this.path) return
+      if (!this.commitMessage.trim()) {
+        this.notify('err', '提交信息不能为空')
+        return
+      }
+      try {
+        const r = await api.commitChanges(this.path, this.commitMessage, this.amend, false)
+        this.commitMessage = ''
+        this.amend = false
+        this.notify('ok', `已提交 ${r.short}`)
+        this.info = await api.openRepo(this.path)
+        await this.refreshStatus()
+        await this.reload()
+        const fresh = this.rows.find((x) => x.oid === r.oid)
+        if (fresh) await this.select(fresh)
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async openWorktreeDiff(file: string, staged: boolean) {
+      if (!this.path) return
+      this.diffFile = file
+      this.diffStaged = staged
+      this.diff = null
+      this.diffLoading = true
+      try {
+        this.diff = await api.worktreeDiff(this.path, file, staged)
+      } catch {
+        this.diff = null
+      } finally {
+        this.diffLoading = false
+      }
+    },
+
+    /* ─────────────── 同步 ─────────────── */
+
+    async sync(kind: 'fetch' | 'pull' | 'push', force = false) {
+      if (!this.path) return
+      this.syncing = kind
+      this.syncOutput = ''
+      try {
+        const r =
+          kind === 'fetch'
+            ? await api.fetch(this.path)
+            : kind === 'pull'
+              ? await api.pull(this.path)
+              : await api.push(this.path, force)
+        this.syncOutput = r.output || '(无输出)'
+        this.notify('ok', `${kind} 完成`)
+        this.info = await api.openRepo(this.path)
+        await this.refreshStatus()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      } finally {
+        this.syncing = ''
+      }
+    },
+
+    /* ─────────────── 安全网 ─────────────── */
+
+    async loadSnapshots() {
+      if (!this.path) return
+      this.snapshotsLoading = true
+      try {
+        this.snapshots = (await api.snapshots(this.path)).snapshots
+      } catch {
+        this.snapshots = []
+      } finally {
+        this.snapshotsLoading = false
+      }
+    },
+
+    async restoreSnapshot(ref: string) {
+      if (!this.path) return
+      try {
+        await api.restoreSnapshot(this.path, ref)
+        this.notify('ok', '已回滚到该快照（回滚前也留了一份快照）')
+        this.info = await api.openRepo(this.path)
+        await this.refreshStatus()
+        await this.reload()
+        await this.loadSnapshots()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    /* ─────────────── 冲突 ─────────────── */
+
+    async openConflict(file: string) {
+      if (!this.path) return
+      this.conflictFile = file
+      this.conflict = null
+      this.conflictLoading = true
+      try {
+        this.conflict = await api.conflict(this.path, file)
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+        this.conflictFile = ''
+      } finally {
+        this.conflictLoading = false
+      }
+    },
+
+    closeConflict() {
+      this.conflictFile = ''
+      this.conflict = null
+    },
+
+    async saveResolution(content: string) {
+      if (!this.path || !this.conflictFile) return
+      try {
+        await api.resolve(this.path, this.conflictFile, content)
+        this.notify('ok', '冲突已解决并暂存')
+        this.closeConflict()
+        await this.refreshStatus()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async resolveSide(side: 'ours' | 'theirs') {
+      if (!this.path || !this.conflictFile) return
+      try {
+        await api.resolveSide(this.path, this.conflictFile, side)
+        this.notify('ok', `已整文件采用${side === 'ours' ? '我方' : '对方'}`)
+        this.closeConflict()
+        await this.refreshStatus()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
     },
   },
 })
