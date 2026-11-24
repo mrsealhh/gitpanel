@@ -99,6 +99,35 @@ pub struct FileDiff {
     pub truncated: bool,
 }
 
+/// 插件/自定义命令（来自 .gitpanel/commands.json）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCommand {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    /// repo = 仓库级配置，user = 用户级配置
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandResult {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteInfo {
+    pub name: String,
+    pub url: String,
+    /// 可点击的网页地址
+    pub web: String,
+}
+
 /// 布局输入：只保留算法需要的字段
 #[derive(Debug, Clone)]
 pub struct RawCommit {

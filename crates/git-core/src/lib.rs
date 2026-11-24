@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod graph;
 pub mod model;
 pub mod repo;

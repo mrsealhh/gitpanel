@@ -84,3 +84,26 @@ export interface FileDiff {
   isBinary: boolean
   truncated: boolean
 }
+
+/** 插件/自定义命令（来自 .gitpanel/commands.json） */
+export interface PluginCommand {
+  id: string
+  title: string
+  description?: string
+  /** repo = 仓库级配置，user = 用户级配置 */
+  source: string
+}
+
+export interface CommandResult {
+  code: number
+  stdout: string
+  stderr: string
+  durationMs: number
+}
+
+export interface RemoteInfo {
+  name: string
+  url: string
+  /** 可点击的网页地址，如 https://github.com/owner/repo */
+  web?: string
+}

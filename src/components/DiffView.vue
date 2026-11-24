@@ -7,6 +7,7 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import type { Extension } from '@codemirror/state'
 import type { FileDiff } from '../api/types'
+import { useSettingsStore } from '../stores/settings'
 
 const props = defineProps<{
   file: string
@@ -16,52 +17,64 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 
+const settings = useSettingsStore()
 const host = ref<HTMLElement | null>(null)
 let view: MergeView | null = null
 let seq = 0
 
 const highlight = HighlightStyle.define([
-  { tag: tags.comment, color: '#5b6472', fontStyle: 'italic' },
+  { tag: tags.comment, color: '#6b7688', fontStyle: 'italic' },
   { tag: tags.keyword, color: '#c084fc' },
-  { tag: [tags.string, tags.special(tags.string)], color: '#86efac' },
+  { tag: [tags.string, tags.special(tags.string)], color: '#4ade80' },
   { tag: [tags.number, tags.bool, tags.null], color: '#fbbf24' },
   { tag: [tags.function(tags.variableName), tags.labelName], color: '#60a5fa' },
-  { tag: [tags.typeName, tags.className], color: '#5eead4' },
-  { tag: tags.propertyName, color: '#93c5fd' },
+  { tag: [tags.typeName, tags.className], color: '#2dd4bf' },
+  { tag: tags.propertyName, color: '#7dd3fc' },
   { tag: [tags.operator, tags.punctuation], color: '#94a3b8' },
   { tag: tags.heading, color: '#f0abfc', fontWeight: '600' },
 ])
 
-const theme = EditorView.theme(
-  {
-    '&': { backgroundColor: 'transparent', color: '#cbd5e1', height: '100%' },
-    '.cm-scroller': {
-      fontFamily: "'JetBrains Mono', Consolas, 'Cascadia Code', monospace",
-      fontSize: '12px',
-      lineHeight: '1.6',
-      overflow: 'auto',
-    },
-    '.cm-content': { caretColor: 'transparent' },
-    '.cm-gutters': {
-      backgroundColor: '#0e1117',
-      color: '#3f4855',
-      border: 'none',
-      fontSize: '11px',
-    },
-    '.cm-activeLine': { backgroundColor: 'transparent' },
-    '.cm-activeLineGutter': { backgroundColor: 'transparent' },
-    '.cm-selectionBackground': { backgroundColor: 'rgba(91,157,255,.18) !important' },
-  },
-  { dark: true },
-)
+function cssVar(name: string, fallback: string) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return v || fallback
+}
 
-const common: Extension[] = [
-  lineNumbers(),
-  EditorView.editable.of(false),
-  EditorState.readOnly.of(true),
-  theme,
-  syntaxHighlighting(highlight),
-]
+/** 每次构建都从 CSS 变量取值，切主题后重建即可同步 */
+function themeExtensions(): Extension {
+  const dark = settings.theme !== 'light'
+  return EditorView.theme(
+    {
+      '&': { backgroundColor: 'transparent', color: cssVar('--text', '#cbd5e1'), height: '100%' },
+      '.cm-scroller': {
+        fontFamily: "'JetBrains Mono', Consolas, 'Cascadia Code', monospace",
+        fontSize: '12px',
+        lineHeight: '1.6',
+        overflow: 'auto',
+      },
+      '.cm-content': { caretColor: 'transparent' },
+      '.cm-gutters': {
+        backgroundColor: cssVar('--panel-2', '#0e1117'),
+        color: cssVar('--text-mute', '#3f4855'),
+        border: 'none',
+        fontSize: '11px',
+      },
+      '.cm-activeLine': { backgroundColor: 'transparent' },
+      '.cm-activeLineGutter': { backgroundColor: 'transparent' },
+      '.cm-selectionBackground': { backgroundColor: cssVar('--accent-weak', '') + ' !important' },
+    },
+    { dark },
+  )
+}
+
+function baseExtensions(): Extension[] {
+  return [
+    lineNumbers(),
+    EditorView.editable.of(false),
+    EditorState.readOnly.of(true),
+    themeExtensions(),
+    syntaxHighlighting(highlight),
+  ]
+}
 
 async function languageFor(file: string): Promise<Extension> {
   const ext = (file.split('.').pop() || '').toLowerCase()
@@ -113,7 +126,7 @@ async function build() {
   if (mine !== seq || !host.value) return
 
   destroy()
-  const ext = [...common, lang]
+  const ext = [...baseExtensions(), lang]
   view = new MergeView({
     a: { doc: props.diff.oldText, extensions: ext },
     b: { doc: props.diff.newText, extensions: ext },
@@ -124,7 +137,7 @@ async function build() {
   })
 }
 
-watch(() => [props.diff, props.file], build, { deep: false })
+watch(() => [props.diff, props.file, settings.theme], build, { deep: false })
 onMounted(build)
 onBeforeUnmount(() => {
   seq++
@@ -133,28 +146,21 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-40 flex flex-col bg-[#0b0d12]">
-    <header class="flex h-11 shrink-0 items-center gap-3 border-b border-white/5 bg-[#12151d] px-4">
-      <span class="truncate font-mono text-[12px] text-slate-300">{{ file }}</span>
-      <span v-if="diff && !diff.isBinary" class="shrink-0 text-[11px] text-slate-500">
+  <div class="fixed inset-0 z-40 flex flex-col" :style="{ background: 'var(--bg)' }">
+    <header class="line-b flex h-11 shrink-0 items-center gap-3 px-4" :style="{ background: 'var(--panel)' }">
+      <span class="truncate font-mono text-[12px] t2">{{ file }}</span>
+      <span v-if="diff && !diff.isBinary" class="shrink-0 text-[11px] t3">
         {{ diff.oldText.split('\n').length }} → {{ diff.newText.split('\n').length }} 行
       </span>
-      <span v-if="diff?.truncated" class="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-300">
+      <span v-if="diff?.truncated" class="shrink-0 rounded px-1.5 py-0.5 text-[11px]" :style="{ background: 'var(--badge-tag-bg)', color: 'var(--badge-tag-fg)' }">
         文件过大，已截断
       </span>
-      <button
-        class="ml-auto rounded border border-white/10 px-2.5 py-[3px] text-[12px] text-slate-400 hover:border-white/20 hover:text-slate-200"
-        @click="emit('close')"
-      >
-        关闭 (Esc)
-      </button>
+      <button class="btn ml-auto" @click="emit('close')">关闭 (Esc)</button>
     </header>
 
-    <div v-if="loading" class="p-6 text-sm text-slate-500">加载文件内容…</div>
-    <div v-else-if="!diff" class="p-6 text-sm text-slate-500">没有可显示的内容</div>
-    <div v-else-if="diff.isBinary" class="p-6 text-sm text-slate-500">
-      二进制文件，暂不支持文本对比
-    </div>
+    <div v-if="loading" class="p-6 text-sm t3">加载文件内容…</div>
+    <div v-else-if="!diff" class="p-6 text-sm t3">没有可显示的内容</div>
+    <div v-else-if="diff.isBinary" class="p-6 text-sm t3">二进制文件，暂不支持文本对比</div>
     <div v-show="diff && !diff.isBinary" ref="host" class="min-h-0 flex-1 overflow-hidden" />
   </div>
 </template>
@@ -179,30 +185,30 @@ onBeforeUnmount(() => {
   overflow: auto;
 }
 .cm-mergeView .cm-mergeViewEditor:first-child {
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid var(--border);
 }
 .cm-changedLine {
-  background: rgba(91, 157, 255, 0.08) !important;
+  background: var(--diff-change) !important;
 }
 .cm-changedText {
-  background: rgba(91, 157, 255, 0.2) !important;
+  background: var(--diff-change-strong) !important;
   border-radius: 2px;
 }
 .cm-insertedLine {
-  background: rgba(34, 197, 94, 0.08) !important;
+  background: var(--diff-insert) !important;
 }
 .cm-deletedLine {
-  background: rgba(244, 63, 94, 0.08) !important;
+  background: var(--diff-delete) !important;
 }
 .cm-changedLineGutter {
-  background: rgba(91, 157, 255, 0.14) !important;
+  background: var(--diff-change-strong) !important;
 }
 .cm-collapsedLines {
-  background: #12151d !important;
-  color: #64748b !important;
+  background: var(--panel-3) !important;
+  color: var(--text-mute) !important;
   font-size: 11px;
 }
 .cm-mergeGutter {
-  background: #0e1117;
+  background: var(--panel-2);
 }
 </style>

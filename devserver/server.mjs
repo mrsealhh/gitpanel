@@ -1,6 +1,9 @@
 // 开发期数据桥：直接调用本机 git，向前端提供与 Rust 内核完全一致的契约。
 // 用途：前端可在浏览器里独立开发、独立压测，不必等 Rust 工具链。
 import http from 'node:http'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { layout } from './layout.mjs'
@@ -236,8 +239,126 @@ async function commitDetail(repoPath, oid) {
   }
 }
 
-function send(res, code, payload) {
-  const body = JSON.stringify(payload)
+// ── 插件 / 自定义命令 ────────────────────────────────────────────────
+
+function readCommandFile(file, source) {
+  try {
+    const arr = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (!Array.isArray(arr)) return []
+    return arr
+      .filter((c) => c && typeof c.id === 'string' && typeof c.command === 'string')
+      .map((c) => ({
+        id: c.id,
+        title: String(c.title || c.id),
+        description: c.description ? String(c.description) : '',
+        command: c.command,
+        args: Array.isArray(c.args) ? c.args.map(String) : [],
+        shell: !!c.shell,
+        source,
+      }))
+  } catch {
+    return []
+  }
+}
+
+function allCommands(repoPath) {
+  const list = [
+    ...readCommandFile(path.join(repoPath, '.gitpanel', 'commands.json'), 'repo'),
+    ...readCommandFile(path.join(os.homedir(), '.gitpanel', 'commands.json'), 'user'),
+  ]
+  const seen = new Set()
+  return list.filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)))
+}
+
+async function listCommands(repoPath) {
+  return {
+    commands: allCommands(repoPath).map(({ id, title, description, source }) => ({
+      id,
+      title,
+      description,
+      source,
+    })),
+  }
+}
+
+async function runCommand(repoPath, id) {
+  const cmd = allCommands(repoPath).find((c) => c.id === id)
+  if (!cmd) throw new Error(`未知命令: ${id}`)
+  const started = Date.now()
+  try {
+    const { stdout, stderr } = await run(cmd.command, cmd.args, {
+      cwd: repoPath,
+      timeout: 60_000,
+      maxBuffer: 8 * 1024 * 1024,
+      windowsHide: true,
+      shell: cmd.shell,
+      encoding: 'utf8',
+    })
+    return { code: 0, stdout, stderr, durationMs: Date.now() - started }
+  } catch (e) {
+    return {
+      code: typeof e.code === 'number' ? e.code : 1,
+      stdout: e.stdout || '',
+      stderr: e.stderr || String(e.message || e),
+      durationMs: Date.now() - started,
+    }
+  }
+}
+
+// ── 远程与分支操作 ──────────────────────────────────────────────────
+
+function toWebUrl(url) {
+  let u = String(url || '').trim()
+  const scp = u.match(/^git@([^:]+):(.+)$/)
+  if (scp) u = `https://${scp[1]}/${scp[2]}`
+  const ssh = u.match(/^ssh:\/\/git@([^/]+)\/(.+)$/)
+  if (ssh) u = `https://${ssh[1]}/${ssh[2]}`
+  u = u.replace(/\.git$/, '')
+  return /^https?:\/\//.test(u) ? u : ''
+}
+
+async function listRemotes(repoPath) {
+  let out = ''
+  try {
+    out = await git(repoPath, ['config', '--get-regexp', '^remote\\..*\\.url$'])
+  } catch {
+    out = ''
+  }
+  const remotes = []
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue
+    const sep = line.indexOf(' ')
+    if (sep < 0) continue
+    const key = line.slice(0, sep)
+    const url = line.slice(sep + 1).trim()
+    const name = key.slice('remote.'.length, key.length - '.url'.length)
+    remotes.push({ name, url, web: toWebUrl(url) })
+  }
+  return { remotes }
+}
+
+const SAFE_REF = /^[A-Za-z0-9._\-\/]+$/
+
+async function checkoutRef(repoPath, ref) {
+  if (!ref || ref.startsWith('-') || !SAFE_REF.test(ref)) throw new Error('非法的引用名')
+  await git(repoPath, ['checkout', ref])
+  const branch = (await git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+  return { ok: true, branch }
+}
+
+async function createBranch(repoPath, name, from) {
+  if (!name || name.startsWith('-') || !SAFE_REF.test(name)) throw new Error('非法的分支名')
+  const args = ['checkout', '-b', name]
+  if (from) {
+    if (from.startsWith('-') || !SAFE_REF.test(from)) throw new Error('非法的起点')
+    args.push(from)
+  }
+  await git(repoPath, args)
+  const branch = (await git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+  return { ok: true, branch }
+}
+
+function send(res, code, payload) {  const body = JSON.stringify(payload)
   res.writeHead(code, {
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': '*',
@@ -277,6 +398,13 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/commit') return send(res, 200, await commitDetail(body.path, body.oid))
     if (url.pathname === '/api/file-diff') {
       return send(res, 200, await fileDiff(body.path, body.oid, body.file))
+    }
+    if (url.pathname === '/api/commands') return send(res, 200, await listCommands(body.path))
+    if (url.pathname === '/api/run-command') return send(res, 200, await runCommand(body.path, body.id))
+    if (url.pathname === '/api/remotes') return send(res, 200, await listRemotes(body.path))
+    if (url.pathname === '/api/checkout') return send(res, 200, await checkoutRef(body.path, body.ref))
+    if (url.pathname === '/api/create-branch') {
+      return send(res, 200, await createBranch(body.path, body.name, body.from))
     }
 
     send(res, 404, { error: 'not found' })

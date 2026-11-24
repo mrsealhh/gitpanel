@@ -1,69 +1,134 @@
 # GitPanel
 
-本地、离线、轻量的 Git 可视化管理面板。分支树 / 历史提交 / 分支管理 / 常用操作，全功能一次到位。
+本地、离线、轻量的 Git 可视化管理面板。分支树 / 历史提交 / 并排 Diff / 主题切换 / 命令面板 / 插件命令，一次到位。
 
 ![提交图](docs/screenshot-graph.png)
 
-![并排 Diff](docs/screenshot-diff.png)
+| 浅色主题 | 设置面板 |
+|---|---|
+| ![浅色](docs/screenshot-light.png) | ![设置](docs/screenshot-settings.png) |
+
+| 命令面板（含插件） | 并排 Diff |
+|---|---|
+| ![命令面板](docs/screenshot-palette.png) | ![Diff](docs/screenshot-diff.png) |
+
+## 功能
+
+**浏览**
+- 分支树：泳道布局算法，颜色绑定分支名（跨页不变色），合并/分叉曲线，Canvas 只画可视区
+- 虚拟滚动：DOM 节点恒定，10 万提交仍 60fps
+- ref 徽章：当前分支 / 本地 / 远程 / 标签，四种配色随主题切换
+- 提交搜索：按说明、作者、短 SHA、分支名即时过滤
+- 键盘导航：`↑` `↓` 切换提交，`Enter` 直接打开变更文件
+- 提交右键菜单：复制 SHA / 说明、查看变更、在远端打开、在此提交上新建分支、只看此提交起的历史
+
+**查看**
+- 并排 Diff（CodeMirror 6 MergeView），未变更段落自动折叠
+- 按扩展名懒加载语法高亮：js / ts / jsx / tsx / json / css / html / vue / markdown / python
+- 二进制文件与超大文件（>400KB）给明确提示，不卡界面
+- 提交详情：作者、时间、父提交、文件级 +/- 统计
+
+**产品化**
+- 4 套主题：深色 / 午夜蓝 / 浅色 / 高对比，CSS 变量驱动，即时生效并持久化
+- 设置面板：主题、列表密度（紧凑/标准/宽松）、显示分支图、相对时间、危险操作确认、快捷键速查
+- 命令面板 `Ctrl+K`：模糊搜索所有操作、主题、插件命令
+- 插件命令：仓库级 / 用户级 `commands.json`，在面板里执行并展示 stdout/stderr 与退出码
+- 状态栏：当前分支、仓库路径、提交数、插件数、选中 SHA、当前主题
 
 ## 技术栈
 
 | 层 | 技术 |
 |---|---|
-| 桌面壳 | Tauri 2 |
-| Git 内核 | Rust（`crates/git-core`，libgit2 先行，接口可平滑替换为 gix） |
+| 桌面壳 | Tauri 2（规划中） |
+| Git 内核 | Rust：`crates/git-core`（读路径 libgit2，写路径 git CLI） |
 | 前端 | Vue 3 + Vite + TypeScript + Tailwind CSS |
-| 提交图 | Canvas 2D 自绘（只画可视区，10 万提交仍 60fps） |
-| 列表 | 自研虚拟滚动（固定行高 26/28px） |
+| 提交图 | Canvas 2D 自绘（只画可视区） |
+| Diff | CodeMirror 6 + `@codemirror/merge` |
 
 ## 目录
 
 ```
-crates/git-core       Git 内核：打开仓库 / 提交遍历 / 泳道布局 / 提交详情
-crates/perf-probe     性能基准 CLI（先用它验证大仓库，再谈 UI）
-devserver/            开发期数据桥：直接调本机 git，输出与 Rust 内核一致的契约
-src/                  Vue 3 前端
+crates/git-core       仓库/遍历/泳道布局/提交详情/文件对比/动作（检出、建分支、插件命令）
+crates/perf-probe     性能基准 CLI（含 --synth 纯算法模式）
+devserver/            开发期数据桥：直调本机 git，输出与 Rust 内核一致的契约
 src/api/              数据适配层（前端唯一数据入口）
-scripts/              开发与维护脚本
+src/stores/           repo（数据）、settings（主题与偏好）
+src/components/       提交图、列表、详情、Diff、设置、命令面板、右键菜单、状态栏
+scripts/              开发脚本（启动、清理 target、CDP 截图）
+.gitpanel/            插件命令示例配置
 ```
 
 ## 快速开始
 
-### 1. 前端 + 开发数据桥（不需要 Rust）
+### 前端 + 开发数据桥（不需要 Rust）
 
 ```powershell
 pnpm install
-powershell -ExecutionPolicy Bypass -File scripts/dev.ps1
+pnpm dev:all          # 数据桥 7717 + 前端 5273
 ```
 
-打开 http://127.0.0.1:5273 ，在顶部输入任意本机仓库路径即可浏览分支树，点右侧文件列表进入并排 Diff。
+打开 http://127.0.0.1:5273 ，顶部填任意本机仓库路径即可。
 
-> 想分开跑：`node devserver/server.mjs`（端口 7717）+ `pnpm dev`（端口 5273）。
+> 端口说明：5173 是 vite 默认端口，本机常被其他项目占用，这里固定 5273；并把 host 固定为 `127.0.0.1`（Node 24 下 vite 默认只绑 `::1`）。
 >
-> 端口 5173 是 vite 默认端口，本机常被其他项目占用，这里固定用 5273。
+> 深链接：`?repo=<路径>&file=<文件>&theme=<dark|midnight|light|contrast>`，便于调试与以后 Tauri 唤醒。
 
-### 2. Rust 内核
+### Rust 内核
 
 ```powershell
-cargo test -p git-core          # 泳道布局单测
+cargo test -p git-core          # 布局 + 安全校验单测
 cargo run -p perf-probe -- F:\gitlab\gitpanel 5000
+cargo run -p perf-probe -- --synth 100000
 ```
 
-编译产物统一输出到 `C:\cargo-target\gitpanel`（见 `.cargo/config.toml`），避免机械盘的随机小文件读写瓶颈。
+编译产物输出到 `C:\cargo-target\gitpanel`（见 `.cargo/config.toml`），避免机械盘随机小文件读写瓶颈。
 
-```powershell
-cargo ck                        # = cargo check，日常快速校验
-powershell -ExecutionPolicy Bypass -File scripts/clean-target.ps1 -Clean   # 清理编译产物
+## 快捷键
+
+| 快捷键 | 作用 |
+|---|---|
+| `Ctrl + K` | 命令面板 |
+| `Ctrl + ,` | 设置 |
+| `Ctrl + F` | 聚焦搜索 |
+| `↑` / `↓` | 切换提交 |
+| `Enter` | 打开变更文件 Diff |
+| `Esc` | 关闭当前浮层 / 清空搜索 |
+
+## 插件命令
+
+在仓库根目录建 `.gitpanel/commands.json`（仓库级），或 `%USERPROFILE%\.gitpanel\commands.json`（用户级，全局可用）。同 id 时仓库级优先。
+
+```json
+[
+  {
+    "id": "git-status",
+    "title": "查看工作区状态",
+    "description": "git status --short --branch",
+    "command": "git",
+    "args": ["status", "--short", "--branch"]
+  },
+  {
+    "id": "custom-shell",
+    "title": "自定义 shell 命令",
+    "command": "echo hello && git rev-parse --short HEAD",
+    "shell": true
+  }
+]
 ```
+
+- 默认以数组形式传参（不经 shell），`"shell": true` 时整条命令交给系统 shell 执行
+- 执行结果在面板里展示，含退出码、耗时、stdout/stderr，可一键复制
+- 命令在仓库根目录执行，超时 60 秒，输出上限 8MB
+- 只在命令面板里显式触发，不会自动运行
 
 ## 数据契约
 
 前端只认 `src/api/types.ts`，与 `crates/git-core/src/model.rs` 一一对应。
 浏览器态走 `devserver/` 的 HTTP 桥，Tauri 态换成 `invoke()`，**界面代码零改动**。
 
-## 性能基线（本机 i5-13400 / 32G / 项目在机械盘、target 在 SSD）
+## 性能基线（i5-13400 / 32G，项目在机械盘、target 在 SSD）
 
-真实仓库 `postsharp`（318 提交 / 156 refs，机械盘）：
+真实仓库 `postsharp`（318 提交 / 156 refs）：
 
 | 操作 | 首次（冷） | 热 |
 |---|---|---|
@@ -71,7 +136,7 @@ powershell -ExecutionPolicy Bypass -File scripts/clean-target.ps1 -Clean   # 清
 | 读取 refs | 39 ms | 23 ms |
 | 提交遍历 + 泳道布局 | 73 ms | 35 ms |
 | 提交详情（含 diff 统计） | 250 ms | 19 ms |
-| 单文件全文对比（file diff） | — | 0.27 ms |
+| 单文件全文对比 | — | 0.27 ms |
 
 纯布局算法（合成 10 万提交，不碰磁盘）：
 
@@ -79,19 +144,23 @@ powershell -ExecutionPolicy Bypass -File scripts/clean-target.ps1 -Clean   # 清
 layout synth : 188–283 ms   100000 rows, 223531 segments
 ```
 
-前端产物：`87 KB JS + 20 KB CSS`（gzip 34 KB + 5 KB）。
+前端产物：`406 KB JS + 23 KB CSS`（gzip 139 KB + 6 KB），语言包按需异步加载。
 
 ## 当前进度
 
-- [x] 仓库打开 / 分支标签
-- [x] 提交图（泳道布局 + Canvas 渲染 + 虚拟滚动）
+- [x] 仓库打开 / 分支标签 / 最近仓库
+- [x] 提交图（泳道布局 + Canvas + 虚拟滚动）
 - [x] 提交列表 / 详情 / 文件变更统计
-- [x] Rust 内核 + 布局单测 + 性能基准 CLI
-- [x] Diff 查看（CodeMirror 6 并排 + 折叠未变更区 + 按扩展名懒加载语法高亮）
-- [ ] 分支 / 暂存 / 提交 / 推拉
+- [x] Rust 内核 + 单测 + 性能基准 CLI
+- [x] 并排 Diff（折叠未变更、语法高亮懒加载）
+- [x] 主题系统（4 套）、设置面板、状态栏
+- [x] 命令面板、快捷键、提交搜索、右键菜单
+- [x] 插件命令（仓库级 / 用户级）
+- [x] 检出分支、创建分支（含引用名白名单校验）
+- [ ] 暂存 / 提交 / 推拉
 - [ ] 冲突解决 / 交互式 rebase / 安全网快照
 - [ ] Tauri 打包
 
 ## 设计文档
 
-见 `C:\Users\Administrator\Desktop\AICoding\autofix\Git可视化管理面板-技术选型与架构设计.md`
+`C:\Users\Administrator\Desktop\AICoding\autofix\Git可视化管理面板-技术选型与架构设计.md`

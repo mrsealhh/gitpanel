@@ -1,4 +1,12 @@
-import type { CommitDetail, FileDiff, GraphPage, RepoInfo } from './types'
+import type {
+  CommandResult,
+  CommitDetail,
+  FileDiff,
+  GraphPage,
+  PluginCommand,
+  RemoteInfo,
+  RepoInfo,
+} from './types'
 
 /**
  * 数据适配层：前端唯一的数据入口。
@@ -38,5 +46,30 @@ export const api = {
   },
   fileDiff(path: string, oid: string, file: string): Promise<FileDiff> {
     return post<FileDiff>('/api/file-diff', { path, oid, file })
+  },
+
+  /** 插件/自定义命令列表（仓库级 + 用户级） */
+  commands(path: string): Promise<{ commands: PluginCommand[] }> {
+    return post<{ commands: PluginCommand[] }>('/api/commands', { path })
+  },
+
+  runCommand(path: string, id: string): Promise<CommandResult> {
+    return post<CommandResult>('/api/run-command', { path, id })
+  },
+
+  remotes(path: string): Promise<{ remotes: RemoteInfo[] }> {
+    return post<{ remotes: RemoteInfo[] }>('/api/remotes', { path })
+  },
+
+  checkout(path: string, ref: string): Promise<{ ok: boolean; branch: string }> {
+    return post<{ ok: boolean; branch: string }>('/api/checkout', { path, ref })
+  },
+
+  createBranch(
+    path: string,
+    name: string,
+    from?: string,
+  ): Promise<{ ok: boolean; branch: string }> {
+    return post<{ ok: boolean; branch: string }>('/api/create-branch', { path, name, from })
   },
 }

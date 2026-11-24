@@ -1,0 +1,30 @@
+[
+  {
+    "id": "git-status",
+    "title": "查看工作区状态",
+    "description": "git status --short --branch",
+    "command": "git",
+    "args": ["status", "--short", "--branch"]
+  },
+  {
+    "id": "recent-tags",
+    "title": "列出最近的标签",
+    "description": "按创建时间倒序",
+    "command": "git",
+    "args": ["tag", "--sort=-creatordate"]
+  },
+  {
+    "id": "branch-list",
+    "title": "列出全部分支",
+    "description": "git branch -a",
+    "command": "git",
+    "args": ["branch", "-a"]
+  },
+  {
+    "id": "unpushed",
+    "title": "查看未推送的提交",
+    "description": "git log @{u}..HEAD --oneline",
+    "command": "git",
+    "args": ["log", "@{u}..HEAD", "--oneline"]
+  }
+]
