@@ -203,3 +203,34 @@ export interface MergeResult {
   snapshot?: string | null
   conflicted?: StatusFile[]
 }
+
+/* ── 交互式 rebase ── */
+
+export type RebaseAction = 'pick' | 'reword' | 'edit' | 'squash' | 'fixup' | 'drop'
+
+export interface RebaseCommit {
+  oid: string
+  short: string
+  subject: string
+  author: string
+  time: number
+}
+
+export interface RebaseStep {
+  oid: string
+  action: RebaseAction
+  subject?: string
+}
+
+export interface RebaseOutcome {
+  ok: boolean
+  conflicts: boolean
+  output: string
+  snapshot?: string | null
+}
+
+export interface RebaseStatus {
+  inProgress: boolean
+  conflicts: boolean
+  conflicted: StatusFile[]
+}

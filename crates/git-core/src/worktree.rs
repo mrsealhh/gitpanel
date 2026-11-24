@@ -116,16 +116,50 @@ pub struct ReflogEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MergeResult {
-    pub ok: bool,
+pub struct MergeResult {    pub ok: bool,
     pub conflicts: bool,
     pub output: String,
     pub snapshot: Option<String>,
     pub conflicted: Vec<StatusFile>,
 }
 
-fn looks_binary(buf: &[u8]) -> bool {
-    buf.iter().take(8000).any(|b| *b == 0)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebaseCommit {
+    pub oid: String,
+    pub short: String,
+    pub subject: String,
+    pub author: String,
+    pub time: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebaseStep {
+    pub oid: String,
+    pub action: String,
+    #[serde(default)]
+    pub subject: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebaseOutcome {
+    pub ok: bool,
+    pub conflicts: bool,
+    pub output: String,
+    pub snapshot: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebaseStatus {
+    pub in_progress: bool,
+    pub conflicts: bool,
+    pub conflicted: Vec<StatusFile>,
+}
+
+fn looks_binary(buf: &[u8]) -> bool {    buf.iter().take(8000).any(|b| *b == 0)
 }
 
 fn blob_to_text(buf: Option<&[u8]>, max: usize) -> String {
@@ -861,6 +895,191 @@ impl Repo {
         git(self.path(), &["branch", "-m", from, to])?;
         Ok(())
     }
+
+    /* ── 交互式 rebase ── */
+
+    fn resolve_commit(&self, rev: &str) -> Result<String> {
+        if !crate::actions::valid_ref(rev) && !rev.contains('~') && !rev.contains('^') {
+            bail!("非法的基点");
+        }
+        Ok(git(self.path(), &["rev-parse", "--verify", &format!("{rev}^{{commit}}")])?
+            .trim()
+            .to_string())
+    }
+
+    pub fn rebase_preview(&self, base: &str) -> Result<Vec<RebaseCommit>> {
+        let base_oid = self.resolve_commit(base)?;
+        let out = git(
+            self.path(),
+            &["log", "--reverse", "--format=%H%x1f%s%x1f%an%x1f%ct", &format!("{base_oid}..HEAD")],
+        )?;
+
+        let commits: Vec<RebaseCommit> = out
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|line| {
+                let mut it = line.split('\u{1f}');
+                let oid = it.next().unwrap_or("").to_string();
+                let subject = it.next().unwrap_or("").to_string();
+                let author = it.next().unwrap_or("").to_string();
+                let time = it.next().unwrap_or("0").parse().unwrap_or(0);
+                RebaseCommit {
+                    short: oid.chars().take(7).collect(),
+                    oid,
+                    subject,
+                    author,
+                    time,
+                }
+            })
+            .collect();
+
+        if commits.is_empty() {
+            bail!("该基点之后没有提交");
+        }
+        Ok(commits)
+    }
+
+    pub fn rebase_start(&self, base: &str, steps: &[RebaseStep]) -> Result<RebaseOutcome> {
+        if steps.is_empty() {
+            bail!("没有可整理的提交");
+        }
+        for st in steps {
+            if !matches!(st.action.as_str(), "pick" | "reword" | "edit" | "squash" | "fixup" | "drop") {
+                bail!("未知的 rebase 动作: {}", st.action);
+            }
+            if !st.oid.chars().all(|c| c.is_ascii_hexdigit()) || st.oid.len() < 7 {
+                bail!("非法的提交");
+            }
+        }
+        let first_kept = steps.iter().find(|s| s.action != "drop");
+        match first_kept {
+            Some(s) if matches!(s.action.as_str(), "pick" | "reword" | "edit") => {}
+            _ => bail!("第一条保留的提交必须是 pick / reword / edit"),
+        }
+
+        let base_oid = self.resolve_commit(base)?;
+        let snapshot = self.create_snapshot("before-rebase")?;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "gitpanel-rebase-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&tmp)?;
+
+        let todo_file = tmp.join("todo.txt");
+        let todo: String = steps
+            .iter()
+            .map(|s| {
+                let subject = s.subject.clone().unwrap_or_default().replace(['\r', '\n'], " ");
+                format!("{} {} {}\n", s.action, s.oid, subject.trim())
+            })
+            .collect();
+        fs::write(&todo_file, todo)?;
+
+        let editor = if cfg!(windows) {
+            let p = tmp.join("seq-editor.cmd");
+            fs::write(
+                &p,
+                format!("@echo off\r\ncopy /y \"{}\" \"%~1\" >nul\r\n", todo_file.display()),
+            )?;
+            p
+        } else {
+            let p = tmp.join("seq-editor.sh");
+            fs::write(&p, format!("#!/bin/sh\ncp \"{}\" \"$1\"\n", todo_file.display()))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&p, fs::Permissions::from_mode(0o755));
+            }
+            p
+        };
+
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(self.path())
+            .args(["rebase", "-i", &base_oid])
+            // git 通过 sh 执行编辑器，Windows 反斜杠会被吞掉，统一用正斜杠
+            .env(
+                "GIT_SEQUENCE_EDITOR",
+                editor.to_string_lossy().replace('\\', "/"),
+            )
+            .env("GIT_EDITOR", "true")
+            .output();
+
+        let _ = fs::remove_dir_all(&tmp);
+
+        match output {
+            Ok(out) if out.status.success() => Ok(RebaseOutcome {
+                ok: true,
+                conflicts: false,
+                output: String::from_utf8_lossy(&out.stdout).trim().to_string(),
+                snapshot,
+            }),
+            Ok(out) => Ok(RebaseOutcome {
+                ok: false,
+                conflicts: true,
+                output: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                snapshot,
+            }),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn rebase_status(&self) -> Result<RebaseStatus> {
+        for dir in ["rebase-merge", "rebase-apply"] {
+            if let Some(rel) = git_allow_fail(self.path(), &["rev-parse", "--git-path", dir]) {
+                let rel = rel.trim();
+                let abs = {
+                    let p = std::path::Path::new(rel);
+                    if p.is_absolute() {
+                        p.to_path_buf()
+                    } else {
+                        self.path().join(p)
+                    }
+                };
+                if abs.exists() {
+                    let st = self.worktree_status()?;
+                    return Ok(RebaseStatus {
+                        in_progress: true,
+                        conflicts: !st.conflicted.is_empty(),
+                        conflicted: st.conflicted,
+                    });
+                }
+            }
+        }
+        Ok(RebaseStatus {
+            in_progress: false,
+            conflicts: false,
+            conflicted: Vec::new(),
+        })
+    }
+
+    pub fn rebase_action(&self, action: &str) -> Result<RebaseOutcome> {
+        if !matches!(action, "continue" | "abort" | "skip") {
+            bail!("未知的 rebase 操作");
+        }
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(self.path())
+            .args(["rebase", &format!("--{action}")])
+            .env("GIT_EDITOR", "true")
+            .output()?;
+
+        let st = self.worktree_status()?;
+        Ok(RebaseOutcome {
+            ok: out.status.success(),
+            conflicts: !st.conflicted.is_empty(),
+            output: if out.status.success() {
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            } else {
+                String::from_utf8_lossy(&out.stderr).trim().to_string()
+            },
+            snapshot: None,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -912,8 +1131,67 @@ u UU N... 100644 100644 100644 100644 aaa bbb ccc app.txt\0";
     }
 
     #[test]
-    fn detects_clean_status() {
-        let st = parse_status("# branch.head main\0");
+    fn rebase_squash_two_commits() {
+        let dir = std::env::temp_dir().join(format!("gitpanel-rebase-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .expect("git 启动失败");
+            assert!(
+                out.status.success(),
+                "git {:?} 失败: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        };
+
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.name", "tester"]);
+        run(&["config", "user.email", "tester@example.com"]);
+        for i in 1..=3 {
+            std::fs::write(dir.join(format!("f{i}.txt")), format!("content {i}")).unwrap();
+            run(&["add", "-A"]);
+            run(&["commit", "-q", "-m", &format!("commit {i}")]);
+        }
+
+        let repo = Repo::open(&dir).unwrap();
+        let commits = repo.rebase_preview("HEAD~2").unwrap();
+        assert_eq!(commits.len(), 2, "HEAD~2 之后应有 2 个提交");
+
+        let steps = vec![
+            RebaseStep {
+                oid: commits[0].oid.clone(),
+                action: "pick".into(),
+                subject: None,
+            },
+            RebaseStep {
+                oid: commits[1].oid.clone(),
+                action: "squash".into(),
+                subject: None,
+            },
+        ];
+        let outcome = repo.rebase_start("HEAD~2", &steps).unwrap();
+        assert!(outcome.ok, "rebase 失败: {}", outcome.output);
+
+        let log = String::from_utf8_lossy(&run(&["log", "--oneline"]).stdout).to_string();
+        assert_eq!(
+            log.lines().count(),
+            2,
+            "两个提交应被合并成一个，实际:\n{log}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detects_clean_status() {        let st = parse_status("# branch.head main\0");
         assert!(st.clean);
         assert!(st.staged.is_empty());
     }

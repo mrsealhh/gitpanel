@@ -50,6 +50,34 @@ function open(f: StatusFile, staged: boolean) {
       <button class="btn ml-auto px-2 py-0.5 text-[11px]" @click="repo.refreshStatus()">刷新</button>
     </div>
 
+    <div
+      v-if="repo.rebaseStatus?.inProgress"
+      class="line-b px-3 py-2"
+      :style="{ background: 'rgba(251,146,60,.10)' }"
+    >
+      <div class="flex items-center gap-2">
+        <span class="text-[11px] font-medium" style="color: #fb923c">变基进行中</span>
+        <span v-if="repo.rebaseStatus.conflicts" class="text-[10px]" style="color: #fb923c">
+          {{ repo.rebaseStatus.conflicted.length }} 个冲突待解决
+        </span>
+        <div class="ml-auto flex gap-1">
+          <button
+            class="btn px-1.5 py-0 text-[10px]"
+            :disabled="repo.rebaseStatus.conflicts"
+            :style="repo.rebaseStatus.conflicts ? { opacity: 0.4 } : {}"
+            title="解决完冲突并暂存后继续"
+            @click="repo.rebaseAction('continue')"
+          >
+            继续
+          </button>
+          <button class="btn px-1.5 py-0 text-[10px]" title="跳过当前提交" @click="repo.rebaseAction('skip')">跳过</button>
+          <button class="btn px-1.5 py-0 text-[10px]" style="color: #f87171" title="回到变基前" @click="repo.rebaseAction('abort')">
+            中止
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div class="min-h-0 flex-1 overflow-y-auto">
       <div v-if="!st" class="p-3 text-[12px] t3">{{ repo.statusLoading ? '读取中…' : '未打开仓库' }}</div>
       <div v-else-if="st.clean" class="p-3 text-[12px] t3">工作区干净，没有待处理的改动</div>

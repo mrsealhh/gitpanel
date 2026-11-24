@@ -473,6 +473,20 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/reset-to') {
       return send(res, 200, await ops.resetTo(body.path, body.oid, body.mode))
     }
+
+    // ── 交互式 rebase ──
+    if (url.pathname === '/api/rebase-preview') {
+      return send(res, 200, await ops.rebasePreview(body.path, body.base))
+    }
+    if (url.pathname === '/api/rebase-start') {
+      return send(res, 200, await ops.rebaseStart(body.path, body.base, body.steps))
+    }
+    if (url.pathname === '/api/rebase-status') {
+      return send(res, 200, await ops.rebaseStatus(body.path))
+    }
+    if (url.pathname === '/api/rebase-action') {
+      return send(res, 200, await ops.rebaseAction(body.path, body.action))
+    }
     if (url.pathname === '/api/conflict') {
       return send(res, 200, await conflict.conflictDetail(body.path, body.file))
     }

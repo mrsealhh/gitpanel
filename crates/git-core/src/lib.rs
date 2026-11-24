@@ -7,6 +7,6 @@ pub mod worktree;
 pub use model::*;
 pub use repo::Repo;
 pub use worktree::{
-    ConflictBlock, ConflictDetail, ReflogEntry, Snapshot, Stash, StashDiff, StatusFile, TagInfo,
-    WorktreeStatus,
+    ConflictBlock, ConflictDetail, RebaseCommit, RebaseOutcome, RebaseStatus, RebaseStep,
+    ReflogEntry, Snapshot, Stash, StashDiff, StatusFile, TagInfo, WorktreeStatus,
 };

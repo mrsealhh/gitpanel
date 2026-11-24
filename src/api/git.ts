@@ -6,6 +6,10 @@ import type {
   GraphPage,
   MergeResult,
   PluginCommand,
+  RebaseCommit,
+  RebaseOutcome,
+  RebaseStatus,
+  RebaseStep,
   ReflogEntry,
   RemoteInfo,
   RepoInfo,
@@ -202,5 +206,19 @@ export const api = {
   },
   resetTo(path: string, oid: string, mode: 'soft' | 'mixed' | 'hard'): Promise<{ ok: boolean }> {
     return post<{ ok: boolean }>('/api/reset-to', { path, oid, mode })
+  },
+
+  /* ── 交互式 rebase ── */
+  rebasePreview(path: string, base: string): Promise<{ base: string; commits: RebaseCommit[] }> {
+    return post<{ base: string; commits: RebaseCommit[] }>('/api/rebase-preview', { path, base })
+  },
+  rebaseStart(path: string, base: string, steps: RebaseStep[]): Promise<RebaseOutcome> {
+    return post<RebaseOutcome>('/api/rebase-start', { path, base, steps })
+  },
+  rebaseStatus(path: string): Promise<RebaseStatus> {
+    return post<RebaseStatus>('/api/rebase-status', { path })
+  },
+  rebaseAction(path: string, action: 'continue' | 'abort' | 'skip'): Promise<RebaseOutcome> {
+    return post<RebaseOutcome>('/api/rebase-action', { path, action })
   },
 }

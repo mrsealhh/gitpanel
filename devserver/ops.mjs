@@ -1,6 +1,7 @@
 // 工作区与写操作：状态解析、暂存/提交、推拉、安全网快照。
 // 设计约定：读路径用 git 结构化解剖，写路径走 git CLI；破坏性操作前自动打快照。
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -468,7 +469,152 @@ export async function renameBranch(repo, from, to) {
   return { ok: true }
 }
 
-/* ────────────────────────── reflog / 重置 ────────────────────────── */
+/* ────────────────────────── 交互式 rebase ────────────────────────── */
+
+const SAFE_ACTION = new Set(['pick', 'reword', 'edit', 'squash', 'fixup', 'drop'])
+
+/** rebase 基点允许 HEAD~3 / main^2 这类修订表达式 */
+function assertRev(value, label = '基点') {
+  if (
+    !value ||
+    value.startsWith('-') ||
+    value.includes('..') ||
+    !/^[A-Za-z0-9._\-\/~^]+$/.test(value)
+  ) {
+    throw new Error(`非法的${label}`)
+  }
+}
+
+function assertOid(oid) {
+  if (!/^[0-9a-f]{7,40}$/i.test(oid)) throw new Error('非法的提交')
+}
+
+export async function rebasePreview(repo, base) {
+  const git = makeGit(repo)
+  assertRev(base)
+  const baseOid = (await git(['rev-parse', '--verify', `${base}^{commit}`])).trim()
+  const out = await git([
+    'log',
+    '--reverse',
+    '--format=%H%x1f%s%x1f%an%x1f%ct',
+    `${baseOid}..HEAD`,
+  ])
+
+  const commits = out
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [oid, subject, author, at] = line.split('\x1f')
+      return { oid, short: oid.slice(0, 7), subject: subject || '', author: author || '', time: Number(at) || 0 }
+    })
+
+  if (!commits.length) throw new Error('该基点之后没有提交')
+  return { base: baseOid, commits }
+}
+
+export async function rebaseStart(repo, base, steps) {
+  if (!Array.isArray(steps) || !steps.length) throw new Error('没有可整理的提交')
+  for (const st of steps) {
+    if (!SAFE_ACTION.has(st.action)) throw new Error(`未知的 rebase 动作: ${st.action}`)
+    assertOid(st.oid)
+  }
+  const first = steps.find((st) => st.action !== 'drop')
+  if (!first || (first.action !== 'pick' && first.action !== 'reword' && first.action !== 'edit')) {
+    throw new Error('第一条保留的提交必须是 pick / reword / edit')
+  }
+
+  const git = makeGit(repo)
+  assertRev(base)
+  const baseOid = (await git(['rev-parse', '--verify', `${base}^{commit}`])).trim()
+  const snap = await createSnapshot(repo, 'before-rebase')
+
+  const tmp = path.join(os.tmpdir(), `gitpanel-rebase-${Date.now()}`)
+  fs.mkdirSync(tmp, { recursive: true })
+  const todoFile = path.join(tmp, 'todo.txt')
+  const todo = steps
+    .map((st) => `${st.action} ${st.oid} ${String(st.subject || '').replace(/\r?\n/g, ' ')}`.trim())
+    .join('\n')
+  fs.writeFileSync(todoFile, `${todo}\n`, 'utf8')
+
+  let editor
+  if (process.platform === 'win32') {
+    editor = path.join(tmp, 'seq-editor.cmd')
+    fs.writeFileSync(editor, `@echo off\r\ncopy /y "${todoFile}" "%~1" >nul\r\n`, 'utf8')
+  } else {
+    editor = path.join(tmp, 'seq-editor.sh')
+    fs.writeFileSync(editor, `#!/bin/sh\ncp "${todoFile}" "$1"\n`, { mode: 0o755 })
+  }
+  // git 通过 sh 执行编辑器，Windows 反斜杠会被当转义符吃掉，统一用正斜杠
+  const editorArg = editor.replace(/\\/g, '/')
+
+  try {
+    const { stdout } = await run('git', ['-C', repo, 'rebase', '-i', baseOid], {
+      env: { ...process.env, GIT_SEQUENCE_EDITOR: editorArg, GIT_EDITOR: 'true' },
+      encoding: 'utf8',
+      windowsHide: true,
+      maxBuffer: MAX_BUFFER,
+      timeout: 120_000,
+    })
+    return { ok: true, conflicts: false, output: stdout.trim(), snapshot: snap }
+  } catch (e) {
+    return {
+      ok: false,
+      conflicts: true,
+      output: String(e.stderr || e.message || '').trim(),
+      snapshot: snap,
+    }
+  } finally {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    } catch {
+      /* 忽略清理失败 */
+    }
+  }
+}
+
+export async function rebaseStatus(repo) {
+  const git = makeGit(repo)
+  for (const dir of ['rebase-merge', 'rebase-apply']) {
+    try {
+      const rel = (await git(['rev-parse', '--git-path', dir])).trim()
+      const abs = path.isAbsolute(rel) ? rel : path.join(repo, rel)
+      if (fs.existsSync(abs)) {
+        const st = await worktreeStatus(repo)
+        return {
+          inProgress: true,
+          kind: dir,
+          conflicts: st.conflicted.length > 0,
+          conflicted: st.conflicted,
+        }
+      }
+    } catch {
+      /* 忽略 */
+    }
+  }
+  return { inProgress: false, conflicts: false, conflicted: [] }
+}
+
+export async function rebaseAction(repo, action) {
+  if (!['continue', 'abort', 'skip'].includes(action)) throw new Error('未知的 rebase 操作')
+  try {
+    const { stdout } = await run('git', ['-C', repo, 'rebase', `--${action}`], {
+      env: { ...process.env, GIT_EDITOR: 'true' },
+      encoding: 'utf8',
+      windowsHide: true,
+      maxBuffer: MAX_BUFFER,
+      timeout: 120_000,
+    })
+    return { ok: true, conflicts: false, output: stdout.trim() }
+  } catch (e) {
+    const st = await worktreeStatus(repo)
+    return {
+      ok: false,
+      conflicts: st.conflicted.length > 0,
+      output: String(e.stderr || e.message || '').trim(),
+      conflicted: st.conflicted,
+    }
+  }
+}
 
 export async function listReflog(repo, limit = 60) {
   const git = makeGit(repo)

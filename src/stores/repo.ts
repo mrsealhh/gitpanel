@@ -10,6 +10,10 @@ import type {
   FileDiff,
   MergeResult,
   PluginCommand,
+  RebaseCommit,
+  RebaseOutcome,
+  RebaseStatus,
+  RebaseStep,
   ReflogEntry,
   RemoteInfo,
   RepoInfo,
@@ -80,6 +84,13 @@ export const useRepoStore = defineStore('repo', {
     tags: [] as TagInfo[],
     reflog: [] as ReflogEntry[],
     reflogLoading: false,
+
+    // 交互式 rebase
+    rebaseOpen: false,
+    rebaseBase: 'HEAD~5',
+    rebaseCommits: [] as RebaseCommit[],
+    rebaseLoading: false,
+    rebaseStatus: null as RebaseStatus | null,
   }),
 
   getters: {
@@ -109,6 +120,7 @@ export const useRepoStore = defineStore('repo', {
         this.remember(this.info.path)
         await this.reload()
         this.loadExtras()
+        await this.refreshRebaseStatus()
         const first = this.rows[0]
         if (first) await this.select(first)
       } catch (e) {
@@ -624,6 +636,89 @@ export const useRepoStore = defineStore('repo', {
         await this.refreshStatus()
         await this.reload()
         await this.loadReflog()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    /* ─────────────── 交互式 rebase ─────────────── */
+
+    async refreshRebaseStatus() {
+      if (!this.path) return
+      try {
+        this.rebaseStatus = await api.rebaseStatus(this.path)
+      } catch {
+        this.rebaseStatus = null
+      }
+    },
+
+    async openRebase(base?: string) {
+      if (!this.path) return
+      this.rebaseOpen = true
+      this.rebaseCommits = []
+      // 没指定基点时，按当前已加载的提交数给一个合理默认值
+      const fallback = `HEAD~${Math.min(5, Math.max(1, (this.rows.length || 1) - 1))}`
+      const start = base ?? this.rebaseBase ?? fallback
+      this.rebaseBase = start
+      await this.loadRebasePreview(start)
+    },
+
+    async loadRebasePreview(base: string) {
+      if (!this.path) return
+      this.rebaseLoading = true
+      try {
+        const res = await api.rebasePreview(this.path, base)
+        this.rebaseBase = base
+        this.rebaseCommits = res.commits
+      } catch (e) {
+        this.rebaseCommits = []
+        this.notify('err', String((e as Error).message || e))
+      } finally {
+        this.rebaseLoading = false
+      }
+    },
+
+    closeRebase() {
+      this.rebaseOpen = false
+      this.rebaseCommits = []
+    },
+
+    async startRebase(steps: RebaseStep[]) {
+      if (!this.path) return
+      this.rebaseLoading = true
+      try {
+        const res: RebaseOutcome = await api.rebaseStart(this.path, this.rebaseBase, steps)
+        if (res.ok) {
+          this.notify('ok', '变基完成')
+          this.closeRebase()
+        } else if (res.conflicts) {
+          this.notify('err', '变基遇到冲突，请到工作区解决后继续')
+          this.closeRebase()
+        } else {
+          this.notify('err', res.output || '变基失败')
+        }
+        this.info = await api.openRepo(this.path)
+        await this.refreshStatus()
+        await this.refreshRebaseStatus()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      } finally {
+        this.rebaseLoading = false
+      }
+    },
+
+    async rebaseAction(action: 'continue' | 'abort' | 'skip') {
+      if (!this.path) return
+      try {
+        const res = await api.rebaseAction(this.path, action)
+        if (res.ok) this.notify('ok', action === 'abort' ? '已中止变基' : '变基已推进')
+        else if (res.conflicts) this.notify('err', '仍有冲突未解决')
+        else this.notify('err', res.output || '操作失败')
+        this.info = await api.openRepo(this.path)
+        await this.refreshStatus()
+        await this.refreshRebaseStatus()
+        await this.reload()
       } catch (e) {
         this.notify('err', String((e as Error).message || e))
       }

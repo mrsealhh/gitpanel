@@ -16,6 +16,10 @@
 |---|---|
 | ![工作区](docs/screenshot-working.png) | ![冲突](docs/screenshot-conflict.png) |
 
+| 交互式 rebase |
+|---|
+| ![rebase](docs/screenshot-rebase.png) |
+
 ![桌面版（无边框窗口）](docs/screenshot-desktop.png)
 
 ## 功能
@@ -56,6 +60,8 @@
 - **标签**：轻量 / 附注标签创建，删除，按时间排序
 - **分支操作**：检出、合并到当前、重命名、删除（右键菜单）
 - **撤销**：reflog 时间线，支持 soft / mixed / hard 重置到任意历史点
+- **交互式 rebase**：拖拽重排提交，逐条设置保留 / 合并(squash) / 合并丢说明(fixup) / 丢弃 / 暂停编辑；
+  变基遇到冲突时工作区顶部出现「继续 / 跳过 / 中止」，解决后接着跑
 
 ## 技术栈
 
@@ -270,7 +276,8 @@ layout synth : 188–283 ms   100000 rows, 223531 segments
 - [x] Tauri 2 桌面壳（无边框标题栏 / 缩放 / 托盘 / 安装包 2.6MB）
 - [x] 多项目记忆（SQLite）+ 更新检查 + 图标化工具条
 - [x] 一键/静默更新（minisign 签名 + GitHub Releases 自动发版）
-- [ ] 交互式 rebase
+- [x] 交互式 rebase（拖拽重排 / squash / fixup / drop + 冲突续做）
+- [ ] 交互式 rebase 的「暂停编辑」动作 UI（edit 需手动 commit 后继续）
 
 ## 内核一致性
 

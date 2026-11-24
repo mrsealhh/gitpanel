@@ -55,6 +55,13 @@ const items = computed<Item[]>(() => {
       run: () => repo.loadSnapshots(),
     },
     {
+      id: 'rebase',
+      title: '交互式 rebase…',
+      hint: '拖拽重排 / squash / drop',
+      group: '仓库',
+      run: () => repo.openRebase(),
+    },
+    {
       id: 'all',
       title: '查看全部提交',
       group: '仓库',

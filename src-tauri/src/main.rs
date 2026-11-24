@@ -139,6 +139,18 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
             json!({ "ok": true, "snapshot": snapshot })
         }
 
+        "rebase-preview" => {
+            let base = s(&p, "base");
+            json!({ "base": base, "commits": repo.rebase_preview(&base)? })
+        }
+        "rebase-start" => {
+            let steps: Vec<git_core::RebaseStep> =
+                serde_json::from_value(p.get("steps").cloned().unwrap_or_else(|| json!([])))?;
+            serde_json::to_value(repo.rebase_start(&s(&p, "base"), &steps)?)?
+        }
+        "rebase-status" => serde_json::to_value(repo.rebase_status()?)?,
+        "rebase-action" => serde_json::to_value(repo.rebase_action(&s(&p, "action"))?)?,
+
         other => return Err(anyhow!("未知命令: {other}")),
     };
 

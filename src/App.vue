@@ -11,6 +11,7 @@ import Icon from './components/Icon.vue'
 import IconButton from './components/IconButton.vue'
 import InputDialog from './components/InputDialog.vue'
 import PatchModal from './components/PatchModal.vue'
+import RebaseDialog from './components/RebaseDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import SidePanel from './components/SidePanel.vue'
 import SnapshotPanel from './components/SnapshotPanel.vue'
@@ -134,6 +135,7 @@ function onKey(e: KeyboardEvent) {
     else if (prompt.value) prompt.value = null
     else if (showPalette.value) showPalette.value = false
     else if (showSettings.value) showSettings.value = false
+    else if (repo.rebaseOpen) repo.closeRebase()
     else if (repo.commandOutput) repo.closeCommandOutput()
     else if (repo.stashDiff) repo.closeStashDiff()
     else if (repo.diffFile) repo.closeDiff()
@@ -208,6 +210,7 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
     : [
         { id: 'checkout', label: '检出此分支' },
         { id: 'merge', label: '合并到当前分支' },
+        { id: 'rebase-onto', label: '交互式 rebase 到此分支' },
         { id: 'divider', label: '', divider: true },
         { id: 'rename', label: '重命名…' },
         { id: 'delete', label: '删除分支', danger: true },
@@ -222,6 +225,7 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
     handler: async (id) => {
       if (id === 'checkout') await repo.checkoutRef(ref.name)
       else if (id === 'merge') await repo.mergeBranch(ref.name)
+      else if (id === 'rebase-onto') await repo.openRebase(ref.name)
       else if (id === 'copy-name') {
         await navigator.clipboard?.writeText(ref.name)
         repo.notify('ok', '已复制名称')
@@ -535,6 +539,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       @close="repo.closeDiff()"
     />
     <PatchModal />
+    <RebaseDialog v-if="repo.rebaseOpen" />
     <CommandPalette v-if="showPalette" @close="showPalette = false" @settings="showSettings = true" />
     <SettingsDialog v-if="showSettings" @close="showSettings = false" />
     <ContextMenu
