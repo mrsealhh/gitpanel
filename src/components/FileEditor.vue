@@ -130,7 +130,26 @@ async function build() {
   })
 }
 
-watch(() => [props.file, settings.theme], build)
+watch(() => [props.file, settings.theme, props.loading], build)
+
+/**
+ * 内容从外面变了（刚读完文件 / 点了重新加载 / 保存成功）时同步进编辑器。
+ * 自己敲字时 props.content 会跟着变，此时 doc 已经等于它，不会重建。
+ */
+watch(
+  () => props.content,
+  (next) => {
+    if (!view) {
+      build()
+      return
+    }
+    if (view.state.doc.toString() === next) return
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: next },
+    })
+  },
+)
+
 onMounted(build)
 onBeforeUnmount(() => {
   seq++

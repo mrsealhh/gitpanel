@@ -384,6 +384,8 @@ export const useRepoStore = defineStore('repo', {
       if (!this.path) return
       if (this.editorFile === file && this.editor) return
       this.editorFile = file
+      this.editor = null
+      this.editorContent = ''
       this.editorLoading = true
       try {
         this.editor = await api.fsRead(this.path, file)
