@@ -133,6 +133,41 @@ const updateStatus = computed(() => {  switch (update.phase) {
           </label>
         </section>
 
+        <section class="mb-6">
+          <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">大文件 Diff</h3>
+          <div class="flex items-center justify-between py-1.5">
+            <span class="text-[12px] t2">单次最多显示行数（按性能优先）</span>
+            <div class="flex items-center gap-2">
+              <input
+                v-model.number="settings.diffMaxLines"
+                type="number"
+                min="0"
+                step="500"
+                class="field w-[96px] px-2 py-1 text-right text-[12px]"
+                @change="settings.save()"
+              />
+              <span class="text-[11px] t3">行</span>
+            </div>
+          </div>
+          <div class="flex items-center justify-between py-1.5">
+            <span class="text-[12px] t2">大文件阈值</span>
+            <div class="flex items-center gap-2">
+              <input
+                v-model.number="settings.diffLargeKB"
+                type="number"
+                min="0"
+                step="128"
+                class="field w-[96px] px-2 py-1 text-right text-[12px]"
+                @change="settings.save()"
+              />
+              <span class="text-[11px] t3">KB</span>
+            </div>
+          </div>
+          <p class="mt-1 text-[11px] leading-relaxed t3">
+            超过阈值时按上面的行数分段读取，不会截断丢内容：点「继续加载」一段段往后翻。填 0 表示不限。
+          </p>
+        </section>
+
         <section v-if="isTauri" class="mb-6">
           <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">窗口行为</h3>
           <label class="flex cursor-pointer items-center justify-between py-1.5">

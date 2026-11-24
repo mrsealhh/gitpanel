@@ -44,6 +44,19 @@ fn opt_s(p: &Value, k: &str) -> Option<String> {
     p.get(k).and_then(|v| v.as_str()).map(|v| v.to_string())
 }
 
+fn opt_n(p: &Value, k: &str) -> Option<u32> {
+    p.get(k).and_then(|v| v.as_u64()).map(|v| v as u32)
+}
+
+/// 前端传来的大文件窗口参数（行数 / 字节数 / 起始行）
+fn diff_window(p: &Value) -> git_core::text::DiffWindow {
+    git_core::text::DiffWindow::new(
+        opt_n(p, "fromLine"),
+        opt_n(p, "maxLines"),
+        opt_n(p, "maxBytes"),
+    )
+}
+
 fn dispatch(cmd: &str, p: Value) -> Result<Value> {
     let path = s(&p, "path");
     if path.is_empty() {
@@ -55,7 +68,10 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
         "open" => serde_json::to_value(repo.info()?)?,
         "graph" => serde_json::to_value(repo.graph_page(n(&p, "offset", 0), n(&p, "limit", 400), &s(&p, "tip"))?)?,
         "commit" => serde_json::to_value(repo.commit_detail(&s(&p, "oid"))?)?,
-        "file-diff" => serde_json::to_value(repo.file_diff(&s(&p, "oid"), &s(&p, "file"))?)?,
+        "file-diff" => {
+            let win = diff_window(&p);
+            serde_json::to_value(repo.file_diff_window(&s(&p, "oid"), &s(&p, "file"), win)?)?
+        }
 
         "commands" => json!({ "commands": repo.commands() }),
         "run-command" => serde_json::to_value(repo.run_command(&s(&p, "id"))?)?,
@@ -68,7 +84,10 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
         }
 
         "worktree-status" => serde_json::to_value(repo.worktree_status()?)?,
-        "worktree-diff" => serde_json::to_value(repo.worktree_diff(&s(&p, "file"), b(&p, "staged"))?)?,
+        "worktree-diff" => {
+            let win = diff_window(&p);
+            serde_json::to_value(repo.worktree_diff_window(&s(&p, "file"), b(&p, "staged"), win)?)?
+        }
         "stage" => {
             repo.stage(&arr(&p, "files"))?;
             json!({ "ok": true })
@@ -179,10 +198,173 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
         }
         "repo-health" => serde_json::to_value(repo.repo_health()?)?,
 
+        /* ── 本地文件的查看 / 编辑（省去开别的编辑器） ── */
+        "fs-list" => fs_list(repo.path(), &s(&p, "dir"))?,
+        "fs-files" => repo_files(repo.path())?,
+        "fs-read" => fs_read(repo.path(), &s(&p, "file"), n(&p, "maxBytes", 2 * 1024 * 1024))?,
+        "fs-write" => fs_write(repo.path(), &s(&p, "file"), &s(&p, "content"))?,
+
         other => return Err(anyhow!("未知命令: {other}")),
     };
 
     Ok(out)
+}
+
+/* ───────────────────────── 本地文件（查看 / 编辑） ───────────────────────── */
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FsEntry {
+    name: String,
+    path: String,
+    is_dir: bool,
+    size: u64,
+}
+
+/// 仓库内所有可编辑文件（已跟踪 + 未跟踪），用于文件面板的全局搜索
+fn repo_files(root: &std::path::Path) -> Result<Value> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-co", "--exclude-standard", "-z"])
+        .output()?;
+    if !out.status.success() {
+        return Err(anyhow!("git ls-files 失败"));
+    }
+    let mut files: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.replace('\\', "/"))
+        .collect();
+    files.sort();
+    files.dedup();
+    Ok(json!({ "files": files }))
+}
+
+/// 把相对路径解析到仓库内，越界（../、绝对路径外跳）直接拒绝
+fn safe_join(root: &std::path::Path, rel: &str) -> Result<std::path::PathBuf> {
+    let rel = rel.trim_start_matches(['/', '\\']);
+    let joined = root.join(rel.replace('\\', "/"));
+    let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    // 目标可能还不存在（新建文件），先按父目录校验
+    let probe = if joined.exists() {
+        joined.clone()
+    } else {
+        joined.parent().map(|p| p.to_path_buf()).unwrap_or(joined.clone())
+    };
+    let canon = probe.canonicalize().unwrap_or(probe);
+    if !canon.starts_with(&canon_root) {
+        return Err(anyhow!("路径越界：{rel}"));
+    }
+    Ok(joined)
+}
+
+fn rel_display(root: &std::path::Path, p: &std::path::Path) -> String {
+    p.strip_prefix(root)
+        .unwrap_or(p)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn fs_list(root: &std::path::Path, dir: &str) -> Result<Value> {    let target = safe_join(root, dir)?;
+    let mut entries: Vec<FsEntry> = Vec::new();
+    for item in std::fs::read_dir(&target)?.flatten() {
+        let name = item.file_name().to_string_lossy().to_string();
+        if name == ".git" {
+            continue;
+        }
+        let meta = match item.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        entries.push(FsEntry {
+            name,
+            path: rel_display(root, &item.path()),
+            is_dir: meta.is_dir(),
+            size: meta.len(),
+        });
+    }
+    // 目录在前，同类按名字排
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(json!({ "dir": rel_display(root, &target), "entries": entries }))
+}
+
+/// 编码判定：utf8 / utf8bom；其它（例如 GBK）只读，避免写回时改坏文件
+fn detect_encoding(bytes: &[u8]) -> (&'static str, bool) {
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return ("utf8bom", true);
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(_) => ("utf8", true),
+        Err(_) => ("other", false),
+    }
+}
+
+fn fs_read(root: &std::path::Path, file: &str, max_bytes: u32) -> Result<Value> {
+    let target = safe_join(root, file)?;
+    if !target.is_file() {
+        return Err(anyhow!("不是文件：{file}"));
+    }
+    let bytes = std::fs::read(&target)?;
+    let size = bytes.len() as u64;
+    let is_binary = bytes.iter().take(8000).any(|b| *b == 0);
+    let (encoding, editable) = detect_encoding(&bytes);
+    let max = max_bytes as usize;
+    let truncated = bytes.len() > max;
+    let slice = &bytes[..bytes.len().min(max)];
+
+    let content = if is_binary {
+        String::new()
+    } else {
+        let text = String::from_utf8_lossy(slice).to_string();
+        text.strip_prefix('\u{feff}').map(|s| s.to_string()).unwrap_or(text)
+    };
+    let lines = if content.is_empty() { 0 } else { content.lines().count() };
+
+    Ok(json!({
+        "file": rel_display(root, &target),
+        "content": content,
+        "size": size,
+        "isBinary": is_binary,
+        "truncated": truncated,
+        "encoding": encoding,
+        "editable": editable && !is_binary && !truncated,
+        "lines": lines,
+    }))
+}
+
+fn fs_write(root: &std::path::Path, file: &str, content: &str) -> Result<Value> {
+    let target = safe_join(root, file)?;
+    // 已有文件：只允许写 UTF-8（含 BOM），其它编码一律拒绝，避免二次破坏
+    let keep_bom = match std::fs::read(&target) {
+        Ok(old) => {
+            let (encoding, editable) = detect_encoding(&old);
+            if !editable {
+                return Err(anyhow!("这个文件不是 UTF-8 编码（可能是 GBK/GB18030），为避免写坏已拒绝保存"));
+            }
+            encoding == "utf8bom"
+        }
+        Err(_) => false,
+    };
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut out = Vec::with_capacity(content.len() + 3);
+    if keep_bom {
+        out.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    }
+    out.extend_from_slice(content.as_bytes());
+    std::fs::write(&target, &out)?;
+    Ok(json!({
+        "ok": true,
+        "file": rel_display(root, &target),
+        "size": out.len(),
+        "lines": content.lines().count(),
+    }))
 }
 
 /* ───────────────────────── 最近打开（SQLite） ───────────────────────── */
@@ -329,7 +511,22 @@ fn clone_repo(url: String, target: String) -> Result<String, String> {
     if out.status.success() {
         Ok(t.to_string_lossy().to_string())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let human = if err.contains("Authentication failed")
+            || err.contains("could not read Username")
+            || err.contains("terminal prompts disabled")
+            || err.contains("Permission denied")
+        {
+            "这台机器还没登录过该仓库。请先在终端执行一次 git clone（或登录 Git 凭据管理器），成功后回来再点克隆；GitPanel 不保存任何账号密码。"
+                .to_string()
+        } else if err.contains("already exists") {
+            "目标目录已经有内容了，换一个空目录再试".to_string()
+        } else if err.contains("not found") || err.contains("Repository not found") {
+            "仓库地址不存在，或者当前账号没有权限".to_string()
+        } else {
+            err
+        };
+        Err(human)
     }
 }
 

@@ -133,6 +133,21 @@ fn tool_list(read_only: bool) -> Vec<Value> {
                 "path": p("仓库路径", "string"), "limit": p("条数，默认 30", "number")
             }, "required": ["path"] }
         }),
+        json!({
+            "name": "list_files",
+            "description": "列出仓库里某个目录的文件（目录在前）",
+            "inputSchema": { "type": "object", "properties": {
+                "path": p("仓库路径", "string"), "dir": p("相对仓库根的目录，默认根目录", "string")
+            }, "required": ["path"] }
+        }),
+        json!({
+            "name": "read_file",
+            "description": "读取工作区里的文本文件（返回内容、行数、编码、是否被截断）",
+            "inputSchema": { "type": "object", "properties": {
+                "path": p("仓库路径", "string"), "file": p("相对仓库根的文件路径", "string"),
+                "maxBytes": p("最多读取多少字节，默认 2MB", "number")
+            }, "required": ["path", "file"] }
+        }),
     ];
 
     if read_only {
@@ -232,6 +247,14 @@ fn tool_list(read_only: bool) -> Vec<Value> {
                 "mode": p("soft | mixed | hard", "string")
             }, "required": ["path", "oid", "mode"] }
         }),
+        json!({
+            "name": "write_file",
+            "description": "写入工作区里的文本文件（只允许 UTF-8 文件，非 UTF-8 会拒绝以免写坏编码）",
+            "inputSchema": { "type": "object", "properties": {
+                "path": p("仓库路径", "string"), "file": p("相对仓库根的文件路径", "string"),
+                "content": p("新的完整文件内容", "string")
+            }, "required": ["path", "file", "content"] }
+        }),
     ]);
 
     tools
@@ -260,6 +283,97 @@ fn open(a: &Value) -> anyhow::Result<Repo> {
     Ok(Repo::open(&path)?)
 }
 
+/// 相对路径解析到仓库内，越界直接拒绝
+fn safe_join(root: &std::path::Path, rel: &str) -> anyhow::Result<std::path::PathBuf> {
+    let trimmed = rel.trim_start_matches(['/', '\\']);
+    let joined = root.join(trimmed.replace('\\', "/"));
+    let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let probe = if joined.exists() {
+        joined.clone()
+    } else {
+        joined.parent().map(|p| p.to_path_buf()).unwrap_or(joined.clone())
+    };
+    let canon = probe.canonicalize().unwrap_or(probe);
+    if !canon.starts_with(&canon_root) {
+        anyhow::bail!("路径越界：{rel}");
+    }
+    Ok(joined)
+}
+
+fn tool_list_files(repo: &Repo, dir: &str) -> anyhow::Result<Value> {
+    let root = repo.path();
+    let target = safe_join(root, dir)?;
+    let mut entries = Vec::new();
+    for item in std::fs::read_dir(&target)?.flatten() {
+        let name = item.file_name().to_string_lossy().to_string();
+        if name == ".git" {
+            continue;
+        }
+        let meta = match item.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        entries.push(json!({
+            "name": name,
+            "path": item.path().strip_prefix(root).unwrap_or(&item.path()).to_string_lossy().replace('\\', "/"),
+            "isDir": meta.is_dir(),
+            "size": meta.len(),
+        }));
+    }
+    entries.sort_by(|a, b| {
+        let ad = a["isDir"].as_bool().unwrap_or(false);
+        let bd = b["isDir"].as_bool().unwrap_or(false);
+        bd.cmp(&ad)
+    });
+    Ok(json!({ "dir": dir, "entries": entries }))
+}
+
+fn tool_read_file(repo: &Repo, file: &str, max_bytes: usize) -> anyhow::Result<Value> {
+    let target = safe_join(repo.path(), file)?;
+    let bytes = std::fs::read(&target)?;
+    let is_binary = bytes.iter().take(8000).any(|b| *b == 0);
+    let truncated = bytes.len() > max_bytes;
+    let slice = &bytes[..bytes.len().min(max_bytes)];
+    let editable = std::str::from_utf8(slice).is_ok() && !is_binary;
+    let content = if is_binary {
+        String::new()
+    } else {
+        String::from_utf8_lossy(slice).trim_start_matches('\u{feff}').to_string()
+    };
+    Ok(json!({
+        "file": file,
+        "content": content,
+        "size": bytes.len(),
+        "lines": if content.is_empty() { 0 } else { content.lines().count() },
+        "isBinary": is_binary,
+        "truncated": truncated,
+        "editable": editable,
+    }))
+}
+
+fn tool_write_file(repo: &Repo, file: &str, content: &str) -> anyhow::Result<Value> {
+    let target = safe_join(repo.path(), file)?;
+    let keep_bom = match std::fs::read(&target) {
+        Ok(old) => {
+            if std::str::from_utf8(&old).is_err() {
+                anyhow::bail!("这个文件不是 UTF-8 编码（可能是 GBK/GB18030），为避免写坏已拒绝写入");
+            }
+            old.starts_with(&[0xEF, 0xBB, 0xBF])
+        }
+        Err(_) => false,
+    };
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut out = Vec::with_capacity(content.len() + 3);
+    if keep_bom {
+        out.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    }
+    out.extend_from_slice(content.as_bytes());
+    std::fs::write(&target, &out)?;
+    Ok(json!({ "ok": true, "file": file, "size": out.len(), "lines": content.lines().count() }))
+}
+
 fn call_tool(name: &str, args: &Value, read_only: bool) -> anyhow::Result<Value> {
     let read_tool = matches!(
         name,
@@ -273,6 +387,8 @@ fn call_tool(name: &str, args: &Value, read_only: bool) -> anyhow::Result<Value>
             | "worktrees"
             | "repo_health"
             | "reflog"
+            | "list_files"
+            | "read_file"
     );
     if read_only && !read_tool {
         anyhow::bail!("当前 MCP 服务运行在只读模式（GITPANEL_MCP_READ_ONLY=1）");
@@ -364,6 +480,16 @@ fn call_tool(name: &str, args: &Value, read_only: bool) -> anyhow::Result<Value>
             let snapshot = repo.reset_to(&arg_str(args, "oid"), &arg_str(args, "mode"))?;
             json!({ "ok": true, "snapshot": snapshot })
         }
+
+        "list_files" => tool_list_files(&repo, &arg_str(args, "dir"))?,
+        "read_file" => {
+            let max = args
+                .get("maxBytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(2 * 1024 * 1024) as usize;
+            tool_read_file(&repo, &arg_str(args, "file"), max)?
+        }
+        "write_file" => tool_write_file(&repo, &arg_str(args, "file"), &arg_str(args, "content"))?,
 
         other => anyhow::bail!("未知工具: {other}"),
     })

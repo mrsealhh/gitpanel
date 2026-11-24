@@ -6,7 +6,9 @@ import { pickFolder } from '../api/desktop'
 const emit = defineEmits<{ (e: 'close'): void; (e: 'cloned', path: string): void }>()
 const repo = useRepoStore()
 
-const url = ref('')
+const props = withDefaults(defineProps<{ initialUrl?: string }>(), { initialUrl: '' })
+
+const url = ref(props.initialUrl)
 const target = ref('')
 const busy = ref(false)
 const error = ref('')

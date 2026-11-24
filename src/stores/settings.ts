@@ -59,6 +59,10 @@ interface Persisted {
   /** 右侧面板宽度 / 是否显示 */
   rightWidth: number
   showRight: boolean
+  /** 大文件 diff：单次最多显示多少行（0 = 不限行） */
+  diffMaxLines: number
+  /** 大文件阈值（KB）：超过就提示「已按性能优先分段加载」 */
+  diffLargeKB: number
 }
 
 function load(): Persisted {
@@ -77,6 +81,8 @@ function load(): Persisted {
     showLeft: true,
     rightWidth: 340,
     showRight: true,
+    diffMaxLines: 3000,
+    diffLargeKB: 512,
   }
   try {
     return { ...fallback, ...JSON.parse(localStorage.getItem(KEY) || '{}') }
@@ -134,6 +140,8 @@ export const useSettingsStore = defineStore('settings', {
         showLeft,
         rightWidth,
         showRight,
+        diffMaxLines,
+        diffLargeKB,
       } = this
       localStorage.setItem(
         KEY,
@@ -152,6 +160,8 @@ export const useSettingsStore = defineStore('settings', {
           showLeft,
           rightWidth,
           showRight,
+          diffMaxLines,
+          diffLargeKB,
         }),
       )
     },
@@ -171,6 +181,8 @@ export const useSettingsStore = defineStore('settings', {
       this.showLeft = true
       this.rightWidth = 340
       this.showRight = true
+      this.diffMaxLines = 3000
+      this.diffLargeKB = 512
       this.applyTheme()
     },
   },

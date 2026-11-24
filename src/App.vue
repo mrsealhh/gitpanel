@@ -11,6 +11,8 @@ import BlameModal from './components/BlameModal.vue'
 import CloneDialog from './components/CloneDialog.vue'
 import DashboardModal from './components/DashboardModal.vue'
 import FileHistoryModal from './components/FileHistoryModal.vue'
+import FileEditor from './components/FileEditor.vue'
+import FilePanel from './components/FilePanel.vue'
 import HealthModal from './components/HealthModal.vue'
 import ProjectSwitcher from './components/ProjectSwitcher.vue'
 import WorktreeDialog from './components/WorktreeDialog.vue'
@@ -54,13 +56,16 @@ const pathInput = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
 const showPalette = ref(false)
 const showSettings = ref(false)
-const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees'>('branches')
+const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees' | 'files'>('branches')
 const maximized = ref(false)
 const diffFullscreen = ref(false)
 const showWorktreeDialog = ref(false)
 const showDashboard = ref(false)
 const showClone = ref(false)
+const cloneUrl = ref('')
 const showDate = ref(false)
+const dateBtn = ref<HTMLElement | null>(null)
+const datePos = ref({ right: 8, top: 0 })
 
 function ymd(d: Date) {
   const p = (n: number) => String(n).padStart(2, '0')
@@ -94,8 +99,23 @@ async function browseFolder() {
     pathInput.value = dir
     await open()
   } else if (!isTauri) {
-    repo.notify('info', '浏览器模式不支持系统文件夹选择，请直接粘贴路径')
+    repo.notify('info', '浏览器模式不支持系统文件夹选择，请用项目下拉里的地址克隆')
   }
+}
+
+/** 从项目下拉里粘贴地址 → 打开克隆框（地址已填好） */
+function onCloneFromUrl(url: string) {
+  cloneUrl.value = url
+  showClone.value = true
+}
+
+/** 日期筛选浮层：用 fixed 定位，避免被标题栏裁剪 */
+function toggleDate() {
+  if (!showDate.value) {
+    const r = dateBtn.value?.getBoundingClientRect()
+    if (r) datePos.value = { right: Math.max(8, window.innerWidth - r.right), top: r.bottom + 6 }
+  }
+  showDate.value = !showDate.value
 }
 
 function onRenameProject(path: string) {
@@ -181,7 +201,7 @@ const changeCount = computed(() => {
   return s.staged.length + s.unstaged.length + s.untracked.length + s.conflicted.length
 })
 
-function switchTab(t: 'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees') {
+function switchTab(t: 'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees' | 'files') {
   leftTab.value = t
   if (t === 'stashes') repo.loadStashes()
   if (t === 'worktrees') repo.loadWorktrees()
@@ -238,6 +258,7 @@ function onKey(e: KeyboardEvent) {
     else if (showWorktreeDialog.value) showWorktreeDialog.value = false
     else if (repo.commandOutput) repo.closeCommandOutput()
     else if (repo.stashDiff) repo.closeStashDiff()
+    else if (repo.editorFile) repo.closeEditor()
     else if (repo.diffFile) closeDiff()
     else if (repo.conflictFile) repo.closeConflict()
     else if (repo.search) repo.search = ''
@@ -526,18 +547,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       <ProjectSwitcher
         @open="openPath"
         @rename="onRenameProject"
-        @clone="showClone = true"
+        @clone="onCloneFromUrl"
         @browse="browseFolder"
       />
-
-      <input
-        v-model="pathInput"
-        class="field min-w-0 max-w-[220px] flex-1 px-2 py-1 font-mono text-[12px]"
-        placeholder="仓库路径，例如 F:\\gitlab\\myrepo"
-        @keydown.enter="open"
-      />
-      <button class="btn btn-primary shrink-0" @click="open">打开</button>
-      <IconButton name="folder" title="选择本地文件夹" :size="15" @click="browseFolder" />
 
       <div class="relative hidden shrink-0 lg:block">
         <input
@@ -580,13 +592,19 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         </div>
 
         <div class="relative">
-          <IconButton
-            name="calendar"
-            title="按提交日期筛选"
-            :active="!!repo.dateFrom || !!repo.dateTo"
-            @click="showDate = !showDate"
-          />
-          <div v-if="showDate" class="modal animate-pop absolute right-0 top-full z-50 mt-1 w-[250px] p-3">
+          <span ref="dateBtn" class="inline-flex">
+            <IconButton
+              name="calendar"
+              title="按提交日期筛选"
+              :active="!!repo.dateFrom || !!repo.dateTo"
+              @click="toggleDate"
+            />
+          </span>
+          <div
+            v-if="showDate"
+            class="modal animate-pop fixed z-[60] w-[250px] p-3"
+            :style="{ right: datePos.right + 'px', top: datePos.top + 'px' }"
+          >
             <div class="mb-2 flex gap-1">
               <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('today')">今日</button>
               <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('yesterday')">昨日</button>
@@ -637,11 +655,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         class="flex h-full shrink-0 flex-col"
         :style="{ width: settings.leftWidth + 'px', borderRight: '1px solid var(--border)' }"
       >
-        <div class="flex h-8 shrink-0 items-center" :style="{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }">
+        <div class="flex h-8 shrink-0 items-center gap-px px-0.5" :style="{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }">
           <button
-            v-for="t in (['branches', 'working', 'stashes', 'snapshots', 'worktrees'] as const)"
+            v-for="t in (['branches', 'working', 'files', 'stashes', 'snapshots', 'worktrees'] as const)"
             :key="t"
-            class="flex h-8 flex-1 items-center justify-center px-0.5 text-[11px] leading-none"
+            class="relative flex h-8 flex-1 items-center justify-center whitespace-nowrap px-0.5 text-[10px] leading-none"
+            :title="t === 'branches' ? '分支' : t === 'working' ? `工作区${changeCount ? `（${changeCount} 项改动）` : ''}` : t === 'files' ? '项目文件（可直接编辑）' : t === 'stashes' ? '暂存区' : t === 'snapshots' ? '安全网快照' : '工作树'"
             :style="
               leftTab === t
                 ? { color: 'var(--text)', boxShadow: 'inset 0 -2px 0 var(--accent)' }
@@ -649,10 +668,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
             "
             @click="switchTab(t)"
           >
-            {{ t === 'branches' ? '分支' : t === 'working' ? '工作区' : t === 'stashes' ? '暂存' : t === 'snapshots' ? '安全网' : '工作树' }}
-            <span v-if="t === 'working' && changeCount" class="ml-0.5" :style="{ color: 'var(--accent)' }">{{ changeCount }}</span>
-            <span v-else-if="t === 'stashes' && repo.stashes.length" class="ml-0.5 t3">{{ repo.stashes.length }}</span>
-            <span v-else-if="t === 'worktrees' && repo.worktrees.length" class="ml-0.5 t3">{{ repo.worktrees.length }}</span>
+            {{ t === 'branches' ? '分支' : t === 'working' ? '工作区' : t === 'files' ? '文件' : t === 'stashes' ? '暂存' : t === 'snapshots' ? '安全网' : '工作树' }}
+            <span
+              v-if="(t === 'working' && changeCount) || (t === 'stashes' && repo.stashes.length) || (t === 'worktrees' && repo.worktrees.length)"
+              class="absolute right-0.5 top-1 h-1 w-1 rounded-full"
+              :style="{ background: t === 'working' ? 'var(--accent)' : 'var(--text-mute)' }"
+            />
           </button>
         </div>
 
@@ -672,6 +693,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           class="min-h-0 flex-1"
           @conflict="repo.openConflict($event)"
         />
+        <FilePanel v-else-if="leftTab === 'files'" class="min-h-0 flex-1" />
         <StashPanel v-else-if="leftTab === 'stashes'" class="min-h-0 flex-1" @create="openCreateStash" />
         <WorktreePanel
           v-else-if="leftTab === 'worktrees'"
@@ -687,8 +709,26 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       <div v-if="settings.showLeft" class="panel-resizer" @pointerdown="startDrag('left', $event)" />
 
       <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <FileEditor
+          v-if="repo.editorFile"
+          class="min-h-0 flex-1"
+          :file="repo.editorFile"
+          :content="repo.editorContent"
+          :dirty="repo.editorDirty"
+          :saving="repo.editorSaving"
+          :loading="repo.editorLoading"
+          :editable="repo.editor?.editable"
+          :encoding="repo.editor?.encoding"
+          :size="repo.editor?.size"
+          :lines="repo.editor?.lines"
+          :truncated="repo.editor?.truncated"
+          @change="repo.editorContent = $event"
+          @save="repo.saveEditor()"
+          @reload="repo.reloadEditor()"
+          @close="repo.closeEditor()"
+        />
         <div
-          v-if="repo.diffFile"
+          v-if="!repo.editorFile && repo.diffFile"
           :class="diffFullscreen ? 'fixed inset-0 z-40 flex' : 'flex min-h-0 flex-1'"
           :style="diffFullscreen ? { background: 'var(--bg)' } : {}"
         >
@@ -698,12 +738,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
             :diff="repo.diff"
             :loading="repo.diffLoading"
             :fullscreen="diffFullscreen"
+            :large-kb="settings.diffLargeKB"
             @toggle-fullscreen="diffFullscreen = !diffFullscreen"
+            @load-more="repo.loadMoreDiff()"
             @close="closeDiff()"
           />
         </div>
         <CommitList
-          v-else
+          v-else-if="!repo.editorFile"
           class="min-w-0 flex-1"
           :rows="repo.filteredRows"
           :selected-oid="repo.selected?.oid"
@@ -799,7 +841,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     <BlameModal />
     <HealthModal />
     <DashboardModal v-if="showDashboard" @close="showDashboard = false" @open="openPath" />
-    <CloneDialog v-if="showClone" @close="showClone = false" @cloned="openPath" />
+    <CloneDialog
+      v-if="showClone"
+      :initial-url="cloneUrl"
+      @close="showClone = false; cloneUrl = ''"
+      @cloned="openPath"
+    />
     <WorktreeDialog v-if="showWorktreeDialog" @close="showWorktreeDialog = false" />
     <CommandPalette
       v-if="showPalette"

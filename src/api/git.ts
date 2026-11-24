@@ -5,6 +5,8 @@ import type {
   CommitDetail,
   FileDiff,
   FileHistoryEntry,
+  FileText,
+  FsEntry,
   GraphPage,
   MergeResult,
   PluginCommand,
@@ -73,8 +75,13 @@ export const api = {
   commit(path: string, oid: string): Promise<CommitDetail> {
     return post<CommitDetail>('/api/commit', { path, oid })
   },
-  fileDiff(path: string, oid: string, file: string): Promise<FileDiff> {
-    return post<FileDiff>('/api/file-diff', { path, oid, file })
+  fileDiff(
+    path: string,
+    oid: string,
+    file: string,
+    win?: { fromLine?: number; maxLines?: number; maxBytes?: number },
+  ): Promise<FileDiff> {
+    return post<FileDiff>('/api/file-diff', { path, oid, file, ...(win ?? {}) })
   },
 
   /** 插件/自定义命令列表（仓库级 + 用户级） */
@@ -106,8 +113,13 @@ export const api = {
   worktreeStatus(path: string): Promise<WorktreeStatus> {
     return post<WorktreeStatus>('/api/worktree-status', { path })
   },
-  worktreeDiff(path: string, file: string, staged: boolean): Promise<FileDiff> {
-    return post<FileDiff>('/api/worktree-diff', { path, file, staged })
+  worktreeDiff(
+    path: string,
+    file: string,
+    staged: boolean,
+    win?: { fromLine?: number; maxLines?: number; maxBytes?: number },
+  ): Promise<FileDiff> {
+    return post<FileDiff>('/api/worktree-diff', { path, file, staged, ...(win ?? {}) })
   },
   stage(path: string, files: string[]): Promise<{ ok: boolean }> {
     return post<{ ok: boolean }>('/api/stage', { path, files })
@@ -272,5 +284,31 @@ export const api = {
   },
   repoHealth(path: string): Promise<RepoHealth> {
     return post<RepoHealth>('/api/repo-health', { path })
+  },
+
+  /* ── 项目本地文件（查看 / 编辑） ── */
+
+  fsList(path: string, dir = ''): Promise<{ dir: string; entries: FsEntry[] }> {
+    return post<{ dir: string; entries: FsEntry[] }>('/api/fs-list', { path, dir })
+  },
+
+  fsFiles(path: string): Promise<{ files: string[] }> {
+    return post<{ files: string[] }>('/api/fs-files', { path })
+  },
+
+  fsRead(path: string, file: string, maxBytes = 2 * 1024 * 1024): Promise<FileText> {
+    return post<FileText>('/api/fs-read', { path, file, maxBytes })
+  },
+
+  fsWrite(
+    path: string,
+    file: string,
+    content: string,
+  ): Promise<{ ok: boolean; file: string; size: number; lines: number }> {
+    return post<{ ok: boolean; file: string; size: number; lines: number }>('/api/fs-write', {
+      path,
+      file,
+      content,
+    })
   },
 }

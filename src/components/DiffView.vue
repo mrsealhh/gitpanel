@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch, computed } from 'vue'
 import { MergeView } from '@codemirror/merge'
 import { EditorView, lineNumbers } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
@@ -8,20 +8,59 @@ import { tags } from '@lezer/highlight'
 import type { Extension } from '@codemirror/state'
 import type { FileDiff } from '../api/types'
 import { useSettingsStore } from '../stores/settings'
+import { languageFor as loadLanguage } from '../lib/lang'
 
 const props = defineProps<{
   file: string
   diff: FileDiff | null
   loading?: boolean
   fullscreen?: boolean
+  /** 大文件阈值（KB），超过就提示已按性能优先分段显示 */
+  largeKB?: number
 }>()
 
-const emit = defineEmits<{ (e: 'close'): void; (e: 'toggle-fullscreen'): void }>()
+const emit = defineEmits<{
+  (e: 'close'): void
+  (e: 'toggle-fullscreen'): void
+  (e: 'load-more'): void
+}>()
 
 const settings = useSettingsStore()
 const host = ref<HTMLElement | null>(null)
 let view: MergeView | null = null
 let seq = 0
+
+/** 当前两版各显示了多少行（用于「已显示 x / y 行」） */
+const shownLines = computed(() => ({
+  old: props.diff ? props.diff.oldFrom + countLines(props.diff.oldText) : 0,
+  new: props.diff ? props.diff.newFrom + countLines(props.diff.newText) : 0,
+}))
+
+const largeBytes = computed(() => {
+  const d = props.diff
+  if (!d) return 0
+  return Math.max(d.oldBytes, d.newBytes)
+})
+
+/** 是否属于「大文件」：超过阈值就明确提示分段加载 */
+const isLarge = computed(() => {
+  const kb = props.largeKB ?? 512
+  return kb > 0 && largeBytes.value > kb * 1024
+})
+
+const sizeLabel = computed(() => {
+  const b = largeBytes.value
+  if (b < 1024) return `${b} B`
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
+  return `${(b / 1024 / 1024).toFixed(1)} MB`
+})
+
+function countLines(text: string): number {
+  if (!text) return 0
+  let n = 0
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++
+  return n + 1
+}
 
 const highlight = HighlightStyle.define([
   { tag: tags.comment, color: '#6b7688', fontStyle: 'italic' },
@@ -78,37 +117,7 @@ function baseExtensions(): Extension[] {
 }
 
 async function languageFor(file: string): Promise<Extension> {
-  const ext = (file.split('.').pop() || '').toLowerCase()
-  switch (ext) {
-    case 'js':
-    case 'jsx':
-    case 'mjs':
-    case 'cjs':
-      return (await import('@codemirror/lang-javascript')).javascript({ jsx: ext === 'jsx' })
-    case 'ts':
-    case 'tsx':
-      return (await import('@codemirror/lang-javascript')).javascript({
-        typescript: true,
-        jsx: ext === 'tsx',
-      })
-    case 'json':
-      return (await import('@codemirror/lang-json')).json()
-    case 'css':
-    case 'scss':
-    case 'less':
-      return (await import('@codemirror/lang-css')).css()
-    case 'html':
-    case 'htm':
-    case 'vue':
-      return (await import('@codemirror/lang-html')).html()
-    case 'md':
-    case 'markdown':
-      return (await import('@codemirror/lang-markdown')).markdown()
-    case 'py':
-      return (await import('@codemirror/lang-python')).python()
-    default:
-      return []
-  }
+  return loadLanguage(file)
 }
 
 function destroy() {
@@ -126,6 +135,10 @@ async function build() {
   const lang = await languageFor(props.file)
   if (mine !== seq || !host.value) return
 
+  // 重建前记住滚动位置，追加后续分段时不会跳回顶部
+  const prevScroller = host.value.querySelector('.cm-scroller') as HTMLElement | null
+  const prevScrollTop = prevScroller?.scrollTop ?? 0
+
   destroy()
   const ext = [...baseExtensions(), lang]
   view = new MergeView({
@@ -136,6 +149,13 @@ async function build() {
     highlightChanges: true,
     gutter: true,
   })
+  if (prevScrollTop > 0) {
+    requestAnimationFrame(() => {
+      host.value?.querySelectorAll('.cm-scroller').forEach((el) => {
+        ;(el as HTMLElement).scrollTop = prevScrollTop
+      })
+    })
+  }
 }
 
 watch(() => [props.diff, props.file, settings.theme], build, { deep: false })
@@ -151,11 +171,25 @@ onBeforeUnmount(() => {
     <header class="line-b flex h-10 shrink-0 items-center gap-3 px-4" :style="{ background: 'var(--panel)' }">
       <span class="truncate font-mono text-[12px] t2">{{ file }}</span>
       <span v-if="diff && !diff.isBinary" class="shrink-0 text-[11px] t3">
-        {{ diff.oldText.split('\n').length }} → {{ diff.newText.split('\n').length }} 行
+        已显示 {{ shownLines.old }} / {{ diff.oldTotalLines }} 行 · {{ sizeLabel }}
       </span>
-      <span v-if="diff?.truncated" class="shrink-0 rounded px-1.5 py-0.5 text-[11px]" :style="{ background: 'var(--badge-tag-bg)', color: 'var(--badge-tag-fg)' }">
-        文件过大，已截断
+      <span
+        v-if="isLarge"
+        class="shrink-0 rounded px-1.5 py-0.5 text-[11px]"
+        :style="{ background: 'var(--badge-tag-bg)', color: 'var(--badge-tag-fg)' }"
+        title="超过大文件阈值，按性能优先分段加载，内容不会丢"
+      >
+        大文件 · 分段加载
       </span>
+      <button
+        v-if="diff?.hasMore"
+        class="btn shrink-0"
+        :disabled="loading"
+        :title="`继续读取后面的内容（每段 ${settings.diffMaxLines || '不限'} 行）`"
+        @click="emit('load-more')"
+      >
+        {{ loading ? '加载中…' : settings.diffMaxLines ? `继续加载 ${settings.diffMaxLines} 行` : '加载全部' }}
+      </button>
       <button class="btn ml-auto" :title="fullscreen ? '退出全屏' : '全屏查看'" @click="emit('toggle-fullscreen')">
         {{ fullscreen ? '退出全屏' : '全屏' }}
       </button>

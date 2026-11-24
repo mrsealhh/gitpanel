@@ -5,10 +5,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { buildFileDiff } from './textwin.mjs'
 
 const run = promisify(execFile)
 const MAX_BUFFER = 64 * 1024 * 1024
-const MAX_TEXT = 400_000
 const SNAP_PREFIX = 'refs/gitpanel/snapshots'
 
 export function makeGit(repo) {
@@ -112,10 +112,6 @@ export async function worktreeStatus(repo) {
 
 /* ────────────────────────── 工作区 Diff ────────────────────────── */
 
-function looksBinary(buf) {
-  return buf.subarray(0, 8000).includes(0)
-}
-
 async function blob(repo, spec) {
   try {
     return await gitRaw(repo, ['show', spec])
@@ -125,7 +121,7 @@ async function blob(repo, spec) {
 }
 
 /** staged=true: HEAD vs index；staged=false: index vs 工作区文件 */
-export async function worktreeDiff(repo, file, staged) {
+export async function worktreeDiff(repo, file, staged, win = {}) {
   let oldBuf
   let newBuf
 
@@ -142,17 +138,7 @@ export async function worktreeDiff(repo, file, staged) {
     }
   }
 
-  if (looksBinary(oldBuf) || looksBinary(newBuf)) {
-    return { path: file, oldText: '', newText: '', isBinary: true, truncated: false }
-  }
-
-  return {
-    path: file,
-    oldText: oldBuf.subarray(0, MAX_TEXT).toString('utf8'),
-    newText: newBuf.subarray(0, MAX_TEXT).toString('utf8'),
-    isBinary: false,
-    truncated: oldBuf.length > MAX_TEXT || newBuf.length > MAX_TEXT,
-  }
+  return buildFileDiff(file, oldBuf, newBuf, win)
 }
 
 /* ────────────────────────── 安全网快照 ────────────────────────── */
@@ -682,8 +668,117 @@ function dirSize(p) {
   return total
 }
 
-export async function repoHealth(repo) {
+/* ────────────────────── 本地文件（查看 / 编辑） ────────────────────── */
+
+/** 相对路径 → 仓库内绝对路径，越界直接拒绝 */
+function safeJoin(repo, rel) {
+  const root = path.resolve(repo)
+  const joined = path.resolve(root, String(rel || '').replace(/^[\\/]+/, ''))
+  if (joined !== root && !joined.startsWith(root + path.sep)) {
+    throw new Error(`路径越界：${rel}`)
+  }
+  return joined
+}
+
+function relOf(root, p) {
+  return path.relative(root, p).replace(/\\/g, '/')
+}
+
+function detectEncoding(buf) {
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    return { encoding: 'utf8bom', editable: true }
+  }
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(buf)
+    return { encoding: 'utf8', editable: true }
+  } catch {
+    return { encoding: 'other', editable: false }
+  }
+}
+
+/** 仓库内所有可编辑文件（已跟踪 + 未跟踪），文件面板全局搜索用 */
+export async function repoFiles(repo) {
   const git = makeGit(repo)
+  const out = await git(['ls-files', '-co', '--exclude-standard', '-z'])
+  const files = out
+    .split('\0')
+    .filter(Boolean)
+    .map((s) => s.replace(/\\/g, '/'))
+  files.sort()
+  return { files: [...new Set(files)] }
+}
+
+export async function fsList(repo, dir = '') {  const root = path.resolve(repo)
+  const target = safeJoin(root, dir)
+  const entries = []
+  for (const item of fs.readdirSync(target, { withFileTypes: true })) {
+    if (item.name === '.git') continue
+    let size = 0
+    try {
+      size = fs.statSync(path.join(target, item.name)).size
+    } catch {
+      size = 0
+    }
+    entries.push({
+      name: item.name,
+      path: relOf(root, path.join(target, item.name)),
+      isDir: item.isDirectory(),
+      size,
+    })
+  }
+  entries.sort((a, b) => (a.isDir === b.isDir ? a.name.toLowerCase().localeCompare(b.name.toLowerCase()) : a.isDir ? -1 : 1))
+  return { dir: relOf(root, target), entries }
+}
+
+export async function fsRead(repo, file, maxBytes = 2 * 1024 * 1024) {
+  const root = path.resolve(repo)
+  const target = safeJoin(root, file)
+  const stat = fs.statSync(target)
+  if (!stat.isFile()) throw new Error(`不是文件：${file}`)
+  const bytes = fs.readFileSync(target)
+  const isBinary = bytes.subarray(0, 8000).includes(0)
+  const { encoding, editable } = detectEncoding(bytes)
+  const truncated = bytes.length > maxBytes
+  const slice = bytes.subarray(0, Math.min(maxBytes, bytes.length))
+  let content = ''
+  if (!isBinary) {
+    content = slice.toString('utf8')
+    if (content.charCodeAt(0) === 0xfeff) content = content.slice(1)
+  }
+  return {
+    file: relOf(root, target),
+    content,
+    size: stat.size,
+    isBinary,
+    truncated,
+    encoding,
+    editable: editable && !isBinary && !truncated,
+    lines: content ? content.split('\n').length : 0,
+  }
+}
+
+export async function fsWrite(repo, file, content) {
+  const root = path.resolve(repo)
+  const target = safeJoin(root, file)
+  let keepBom = false
+  if (fs.existsSync(target)) {
+    const old = fs.readFileSync(target)
+    const { encoding, editable } = detectEncoding(old)
+    if (!editable) throw new Error('这个文件不是 UTF-8 编码（可能是 GBK/GB18030），为避免写坏已拒绝保存')
+    keepBom = encoding === 'utf8bom'
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  const text = keepBom ? '\uFEFF' + content : content
+  fs.writeFileSync(target, text, 'utf8')
+  return {
+    ok: true,
+    file: relOf(root, target),
+    size: Buffer.byteLength(text, 'utf8'),
+    lines: content ? content.split('\n').length : 0,
+  }
+}
+
+export async function repoHealth(repo) {  const git = makeGit(repo)
   const safe = async (args) => {
     try {
       return await git(args)

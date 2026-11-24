@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from '../api/git'
+import { useSettingsStore } from './settings'
 import { recentList, recentPin, recentRemove, recentTouch, recentRename, cloneRepo, gitIdentity } from '../api/desktop'
 import type { RecentRepo } from '../api/desktop'
 import type {
@@ -10,6 +11,7 @@ import type {
   ConflictDetail,
   FileDiff,
   FileHistoryEntry,
+  FileText,
   MergeResult,
   PluginCommand,
   RebaseCommit,
@@ -40,6 +42,19 @@ export interface Notice {
 
 let noticeTimer: number | undefined
 
+function countLines(text: string): number {
+  if (!text) return 0
+  let n = 0
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++
+  return n + 1
+}
+
+function joinChunk(head: string, tail: string): string {
+  if (!tail) return head
+  if (!head) return tail
+  return `${head}\n${tail}`
+}
+
 export const useRepoStore = defineStore('repo', {
   state: () => ({
     path: '',
@@ -61,6 +76,19 @@ export const useRepoStore = defineStore('repo', {
     diffFile: '',
     diff: null as FileDiff | null,
     diffLoading: false,
+    /** 大文件分段：已加载到第几行（两个版本共用同一个起点） */
+    diffFrom: 0,
+    /** diff 属于哪个提交（继续加载时要用） */
+    diffOid: '',
+    /** 当前 diff 来源：提交 vs 工作区 */
+    diffKind: 'commit' as 'commit' | 'worktree',
+
+    // 本地文件编辑（省去打开别的编辑器）
+    editorFile: '',
+    editor: null as FileText | null,
+    editorContent: '',
+    editorLoading: false,
+    editorSaving: false,
     commands: [] as PluginCommand[],
     remotes: [] as RemoteInfo[],
     notice: null as Notice | null,
@@ -148,6 +176,8 @@ export const useRepoStore = defineStore('repo', {
       return rows
     },
     originWeb: (s) => s.remotes.find((r) => r.name === 'origin')?.web ?? s.remotes[0]?.web ?? '',
+    /** 编辑器里有未保存改动 */
+    editorDirty: (s) => !!s.editor && s.editorContent !== s.editor.content,
   },
 
   actions: {
@@ -293,15 +323,50 @@ export const useRepoStore = defineStore('repo', {
       await this.reload()
     },
 
+    /** 大文件阈值：单次最多返回多少行（0 = 不限），按性能优先默认 3000 行 */
+    diffWindow(from: number) {
+      const st = useSettingsStore()
+      return { fromLine: from, maxLines: st.diffMaxLines, maxBytes: 0 }
+    },
+
     async openFileDiff(file: string) {
       this.diffFile = file
       this.diff = null
+      this.diffFrom = 0
+      this.diffKind = 'commit'
       if (!this.path || !this.selected) return
+      this.diffOid = this.selected.oid
       this.diffLoading = true
       try {
-        this.diff = await api.fileDiff(this.path, this.selected.oid, file)
+        this.diff = await api.fileDiff(this.path, this.diffOid, file, this.diffWindow(0))
       } catch {
         this.diff = null
+      } finally {
+        this.diffLoading = false
+      }
+    },
+
+    /** 大文件分段：把后面一段接上（流式加载，不会一次把整个文件塞进视图） */
+    async loadMoreDiff() {
+      if (!this.path || !this.diffFile || !this.diff?.hasMore || this.diffLoading) return
+      const keep = this.diff
+      const from = this.diffFrom + Math.max(countLines(keep.oldText), countLines(keep.newText))
+      this.diffLoading = true
+      try {
+        const next =
+          this.diffKind === 'worktree'
+            ? await api.worktreeDiff(this.path, this.diffFile, this.diffStaged, this.diffWindow(from))
+            : await api.fileDiff(this.path, this.diffOid, this.diffFile, this.diffWindow(from))
+        this.diff = {
+          ...next,
+          oldText: joinChunk(keep.oldText, next.oldText),
+          newText: joinChunk(keep.newText, next.newText),
+          oldFrom: 0,
+          newFrom: 0,
+        }
+        this.diffFrom = from
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
       } finally {
         this.diffLoading = false
       }
@@ -310,16 +375,78 @@ export const useRepoStore = defineStore('repo', {
     closeDiff() {
       this.diffFile = ''
       this.diff = null
+      this.diffFrom = 0
     },
 
-    /** 打开任意提交中某文件的 diff（用于文件历史跳转） */
-    async openFileDiffAt(oid: string, file: string) {
+    /* ── 本地文件编辑 ── */
+
+    async openEditor(file: string) {
+      if (!this.path) return
+      if (this.editorFile === file && this.editor) return
+      this.editorFile = file
+      this.editorLoading = true
+      try {
+        this.editor = await api.fsRead(this.path, file)
+        this.editorContent = this.editor.content
+      } catch (e) {
+        this.editor = null
+        this.editorContent = ''
+        this.notify('err', String((e as Error).message || e))
+      } finally {
+        this.editorLoading = false
+      }
+    },
+
+    async saveEditor(content?: string) {
+      if (!this.path || !this.editorFile || !this.editor) return
+      if (content !== undefined) this.editorContent = content
+      if (!this.editor.editable) {
+        this.notify('err', '这个文件只能只读查看（非 UTF-8 或过大）')
+        return
+      }
+      this.editorSaving = true
+      try {
+        const r = await api.fsWrite(this.path, this.editorFile, this.editorContent)
+        this.editor = {
+          ...this.editor,
+          content: this.editorContent,
+          size: r.size,
+          lines: r.lines,
+          truncated: false,
+        }
+        this.notify('ok', `已保存 ${r.file}`)
+        await this.refreshStatus()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      } finally {
+        this.editorSaving = false
+      }
+    },
+
+    async reloadEditor() {
+      if (!this.editorFile) return
+      const file = this.editorFile
+      this.editor = null
+      this.editorFile = ''
+      await this.openEditor(file)
+    },
+
+    closeEditor() {
+      this.editorFile = ''
+      this.editor = null
+      this.editorContent = ''
+    },
+
+    /** 打开任意提交中某文件的 diff（用于文件历史跳转） */    async openFileDiffAt(oid: string, file: string) {
       if (!this.path) return
       this.diffFile = file
       this.diff = null
+      this.diffFrom = 0
+      this.diffKind = 'commit'
+      this.diffOid = oid
       this.diffLoading = true
       try {
-        this.diff = await api.fileDiff(this.path, oid, file)
+        this.diff = await api.fileDiff(this.path, oid, file, this.diffWindow(0))
       } catch {
         this.diff = null
       } finally {
@@ -439,13 +566,16 @@ export const useRepoStore = defineStore('repo', {
       }
     },
 
-    async openWorktreeDiff(file: string, staged: boolean) {      if (!this.path) return
+    async openWorktreeDiff(file: string, staged: boolean) {
+      if (!this.path) return
       this.diffFile = file
       this.diffStaged = staged
+      this.diffKind = 'worktree'
+      this.diffFrom = 0
       this.diff = null
       this.diffLoading = true
       try {
-        this.diff = await api.worktreeDiff(this.path, file, staged)
+        this.diff = await api.worktreeDiff(this.path, file, staged, this.diffWindow(0))
       } catch {
         this.diff = null
       } finally {

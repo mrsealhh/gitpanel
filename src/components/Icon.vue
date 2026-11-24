@@ -93,5 +93,13 @@ withDefaults(defineProps<{ name: string; size?: number }>(), { size: 16 })
     <template v-else-if="name === 'check'">
       <path d="M4 12.5l5 5L20 6.5" />
     </template>
+    <template v-else-if="name === 'file'">
+      <path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z" />
+      <path d="M13 3v6h6" />
+    </template>
+    <template v-else-if="name === 'save'">
+      <path d="M5 3h11l3 3v15H5z" />
+      <path d="M8 3v6h7V3M8 21v-7h8v7" />
+    </template>
   </svg>
 </template>

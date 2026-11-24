@@ -244,8 +244,16 @@ impl Repo {
     /// 取某个文件在「父提交 vs 当前提交」两个版本的全文，供前端做并排合并视图。
     /// 与 devserver 的 fileDiff 保持同一份契约。
     pub fn file_diff(&self, rev: &str, path: &str) -> Result<FileDiff> {
-        const MAX_BYTES: usize = 400_000;
+        self.file_diff_window(rev, path, crate::text::DiffWindow::default())
+    }
 
+    /// 带行窗口的版本：大文件只取一段，前端按 `fromLine` 往后翻。
+    pub fn file_diff_window(
+        &self,
+        rev: &str,
+        path: &str,
+        win: crate::text::DiffWindow,
+    ) -> Result<FileDiff> {
         let commit = self.inner.revparse_single(rev)?.peel_to_commit()?;
         let new_blob = self.blob_at(&commit.tree()?, path)?;
         let old_blob = if commit.parent_count() > 0 {
@@ -254,28 +262,12 @@ impl Repo {
             None
         };
 
-        let is_binary = old_blob.as_deref().map(looks_binary).unwrap_or(false)
-            || new_blob.as_deref().map(looks_binary).unwrap_or(false);
-
-        let truncated = old_blob.as_ref().map(|b| b.len() > MAX_BYTES).unwrap_or(false)
-            || new_blob.as_ref().map(|b| b.len() > MAX_BYTES).unwrap_or(false);
-
-        let (old_text, new_text) = if is_binary {
-            (String::new(), String::new())
-        } else {
-            (
-                blob_to_text(old_blob.as_deref(), MAX_BYTES),
-                blob_to_text(new_blob.as_deref(), MAX_BYTES),
-            )
-        };
-
-        Ok(FileDiff {
-            path: path.to_string(),
-            old_text,
-            new_text,
-            is_binary,
-            truncated,
-        })
+        Ok(crate::text::build_file_diff(
+            path,
+            old_blob.as_deref(),
+            new_blob.as_deref(),
+            &win,
+        ))
     }
 
     fn blob_at(&self, tree: &git2::Tree, path: &str) -> Result<Option<Vec<u8>>> {
@@ -288,19 +280,5 @@ impl Repo {
             }
             Err(_) => Ok(None),
         }
-    }
-}
-
-fn looks_binary(buf: &[u8]) -> bool {
-    buf.iter().take(8000).any(|b| *b == 0)
-}
-
-fn blob_to_text(buf: Option<&[u8]>, max: usize) -> String {
-    match buf {
-        Some(b) => {
-            let end = b.len().min(max);
-            String::from_utf8_lossy(&b[..end]).to_string()
-        }
-        None => String::new(),
     }
 }

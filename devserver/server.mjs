@@ -7,6 +7,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { layout } from './layout.mjs'
+import { buildFileDiff } from './textwin.mjs'
 import * as ops from './ops.mjs'
 import * as conflict from './conflict.mjs'
 
@@ -32,12 +33,6 @@ async function gitRaw(repo, args) {
   return stdout
 }
 
-const MAX_TEXT = 400_000
-
-function looksBinary(buf) {
-  return buf.subarray(0, 8000).includes(0)
-}
-
 async function tryBlob(repo, revPath) {
   try {
     return await gitRaw(repo, ['show', revPath])
@@ -47,7 +42,7 @@ async function tryBlob(repo, revPath) {
 }
 
 /** 取某文件在「父提交 vs 当前提交」两个版本的全文，交给前端做并排合并视图 */
-async function fileDiff(repoPath, oid, file) {
+async function fileDiff(repoPath, oid, file, win = {}) {
   let parent = ''
   try {
     parent = (await git(repoPath, ['rev-parse', `${oid}^`])).trim()
@@ -58,17 +53,7 @@ async function fileDiff(repoPath, oid, file) {
   const oldBuf = parent ? await tryBlob(repoPath, `${parent}:${file}`) : Buffer.alloc(0)
   const newBuf = await tryBlob(repoPath, `${oid}:${file}`)
 
-  if (looksBinary(oldBuf) || looksBinary(newBuf)) {
-    return { path: file, oldText: '', newText: '', isBinary: true, truncated: false }
-  }
-
-  return {
-    path: file,
-    oldText: oldBuf.subarray(0, MAX_TEXT).toString('utf8'),
-    newText: newBuf.subarray(0, MAX_TEXT).toString('utf8'),
-    isBinary: false,
-    truncated: oldBuf.length > MAX_TEXT || newBuf.length > MAX_TEXT,
-  }
+  return buildFileDiff(file, oldBuf, newBuf, win)
 }
 
 const SEP = '\x1f'
@@ -401,7 +386,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/graph') return send(res, 200, await graphPage(body.path, body))
     if (url.pathname === '/api/commit') return send(res, 200, await commitDetail(body.path, body.oid))
     if (url.pathname === '/api/file-diff') {
-      return send(res, 200, await fileDiff(body.path, body.oid, body.file))
+      return send(res, 200, await fileDiff(body.path, body.oid, body.file, body))
     }
     if (url.pathname === '/api/commands') return send(res, 200, await listCommands(body.path))
     if (url.pathname === '/api/run-command') return send(res, 200, await runCommand(body.path, body.id))
@@ -416,7 +401,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await ops.worktreeStatus(body.path))
     }
     if (url.pathname === '/api/worktree-diff') {
-      return send(res, 200, await ops.worktreeDiff(body.path, body.file, !!body.staged))
+      return send(res, 200, await ops.worktreeDiff(body.path, body.file, !!body.staged, body))
     }
     if (url.pathname === '/api/stage') {
       return send(res, 200, await ops.stageFiles(body.path, body.files || []))
@@ -497,6 +482,19 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/repo-health') {
       return send(res, 200, await ops.repoHealth(body.path))
+    }
+
+    if (url.pathname === '/api/fs-list') {
+      return send(res, 200, await ops.fsList(body.path, body.dir))
+    }
+    if (url.pathname === '/api/fs-files') {
+      return send(res, 200, await ops.repoFiles(body.path))
+    }
+    if (url.pathname === '/api/fs-read') {
+      return send(res, 200, await ops.fsRead(body.path, body.file, body.maxBytes))
+    }
+    if (url.pathname === '/api/fs-write') {
+      return send(res, 200, await ops.fsWrite(body.path, body.file, body.content))
     }
 
     // ── 工作树元数据 / 多仓库看板 ──

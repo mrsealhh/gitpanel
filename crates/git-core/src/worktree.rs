@@ -161,19 +161,6 @@ pub struct RebaseStatus {
     pub conflicted: Vec<StatusFile>,
 }
 
-fn looks_binary(buf: &[u8]) -> bool {    buf.iter().take(8000).any(|b| *b == 0)
-}
-
-fn blob_to_text(buf: Option<&[u8]>, max: usize) -> String {
-    match buf {
-        Some(b) => {
-            let end = b.len().min(max);
-            String::from_utf8_lossy(&b[..end]).to_string()
-        }
-        None => String::new(),
-    }
-}
-
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
         .arg("-C")
@@ -791,8 +778,16 @@ impl Repo {
     }
 
     pub fn worktree_diff(&self, file: &str, staged: bool) -> Result<crate::model::FileDiff> {
-        const MAX: usize = 400_000;
+        self.worktree_diff_window(file, staged, crate::text::DiffWindow::default())
+    }
 
+    /// 带行窗口的工作区 diff（大文件按块取）
+    pub fn worktree_diff_window(
+        &self,
+        file: &str,
+        staged: bool,
+        win: crate::text::DiffWindow,
+    ) -> Result<crate::model::FileDiff> {
         let (old, new) = if staged {
             (
                 self.stage_blob_bytes(&format!("HEAD:{file}")),
@@ -805,24 +800,12 @@ impl Repo {
             )
         };
 
-        let is_binary = old.as_deref().map(looks_binary).unwrap_or(false)
-            || new.as_deref().map(looks_binary).unwrap_or(false);
-        let truncated = old.as_ref().map(|b| b.len() > MAX).unwrap_or(false)
-            || new.as_ref().map(|b| b.len() > MAX).unwrap_or(false);
-
-        let (old_text, new_text) = if is_binary {
-            (String::new(), String::new())
-        } else {
-            (blob_to_text(old.as_deref(), MAX), blob_to_text(new.as_deref(), MAX))
-        };
-
-        Ok(crate::model::FileDiff {
-            path: file.to_string(),
-            old_text,
-            new_text,
-            is_binary,
-            truncated,
-        })
+        Ok(crate::text::build_file_diff(
+            file,
+            old.as_deref(),
+            new.as_deref(),
+            &win,
+        ))
     }
 
     pub fn fetch(&self) -> Result<String> {

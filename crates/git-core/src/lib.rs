@@ -2,6 +2,7 @@ pub mod actions;
 pub mod graph;
 pub mod model;
 pub mod repo;
+pub mod text;
 pub mod worktree;
 
 pub use model::*;

@@ -89,6 +89,10 @@ pub struct CommitDetail {
 }
 
 /// 单个文件的「父版本 / 当前版本」全文，用于并排合并视图
+///
+/// 大文件不再一次性被截断丢弃内容，而是按「行窗口」分块返回：
+/// `oldFrom` / `newFrom` 是本次返回的起始行（0 基），
+/// `oldTotalLines` / `newTotalLines` 是文件总行数，`hasMore` 表示还能继续加载。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileDiff {
@@ -97,6 +101,21 @@ pub struct FileDiff {
     pub new_text: String,
     pub is_binary: bool,
     pub truncated: bool,
+    #[serde(default)]
+    pub old_total_lines: usize,
+    #[serde(default)]
+    pub new_total_lines: usize,
+    #[serde(default)]
+    pub old_from: usize,
+    #[serde(default)]
+    pub new_from: usize,
+    #[serde(default)]
+    pub has_more: bool,
+    /// 两边的原始字节数，用于前端提示「文件多大」
+    #[serde(default)]
+    pub old_bytes: usize,
+    #[serde(default)]
+    pub new_bytes: usize,
 }
 
 /// 插件/自定义命令（来自 .gitpanel/commands.json）

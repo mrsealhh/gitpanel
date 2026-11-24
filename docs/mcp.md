@@ -30,7 +30,7 @@ Claude Desktop：编辑 `%APPDATA%\Claude\claude_desktop_config.json`
 
 Cursor：`.cursor/mcp.json`（项目级）或全局 `~/.cursor/mcp.json`，格式相同。
 
-重启客户端后，工具列表里会出现 `repo_info`、`graph`、`worktree_status`… 共 22 个工具。
+重启客户端后，工具列表里会出现 `repo_info`、`graph`、`worktree_status`… 共 25 个工具。
 
 ## 3. 可用工具
 
@@ -48,6 +48,8 @@ Cursor：`.cursor/mcp.json`（项目级）或全局 `~/.cursor/mcp.json`，格�
 | `worktrees` | 所有并行副本：分支、脏文件、是否已合回主干 |
 | `repo_health` | 体积、pack、大对象、gc 建议 |
 | `reflog` | HEAD 变更历史 |
+| `list_files` | 列出仓库某个目录的文件 |
+| `read_file` | 读取工作区文本文件（内容 / 行数 / 编码 / 是否截断） |
 
 **写操作**（默认开启，可用只读模式关闭）
 
@@ -60,6 +62,7 @@ Cursor：`.cursor/mcp.json`（项目级）或全局 `~/.cursor/mcp.json`，格�
 | `stash_create` / `stash_action` | 暂存区（stash） |
 | `tag_create` | 标签 |
 | `reset_to` | soft / mixed / hard 重置（自动打安全网快照） |
+| `write_file` | 写回工作区文本文件（非 UTF-8 文件会拒绝，避免写坏编码） |
 
 ## 4. 安全建议
 

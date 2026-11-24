@@ -82,7 +82,38 @@ export interface FileDiff {
   oldText: string
   newText: string
   isBinary: boolean
+  /** true 表示还有没取完的行（配合 hasMore） */
   truncated: boolean
+  oldTotalLines: number
+  newTotalLines: number
+  /** 本次返回的起始行（0 基） */
+  oldFrom: number
+  newFrom: number
+  hasMore: boolean
+  oldBytes: number
+  newBytes: number
+}
+
+/** 项目内的一个文件 / 目录（文件面板用） */
+export interface FsEntry {
+  name: string
+  /** 相对仓库根的路径，统一用 / */
+  path: string
+  isDir: boolean
+  size: number
+}
+
+/** 读到的文本文件（编辑用） */
+export interface FileText {
+  file: string
+  content: string
+  size: number
+  isBinary: boolean
+  truncated: boolean
+  /** utf8 / utf8bom / other（other 只读，避免写回改坏编码） */
+  encoding: string
+  editable: boolean
+  lines: number
 }
 
 /** 插件/自定义命令（来自 .gitpanel/commands.json） */
