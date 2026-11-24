@@ -8,12 +8,14 @@ import ContextMenu from './components/ContextMenu.vue'
 import DetailPanel from './components/DetailPanel.vue'
 import DiffView from './components/DiffView.vue'
 import InputDialog from './components/InputDialog.vue'
+import PatchModal from './components/PatchModal.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import SidePanel from './components/SidePanel.vue'
 import SnapshotPanel from './components/SnapshotPanel.vue'
+import StashPanel from './components/StashPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import WorkingPanel from './components/WorkingPanel.vue'
-import type { CommitRow } from './api/types'
+import type { CommitRow, RepoRef } from './api/types'
 import type { MenuItem } from './types/ui'
 import { useRepoStore } from './stores/repo'
 import { useSettingsStore } from './stores/settings'
@@ -25,9 +27,27 @@ const pathInput = ref('F:\\gitlab\\gitpanel')
 const searchInput = ref<HTMLInputElement | null>(null)
 const showPalette = ref(false)
 const showSettings = ref(false)
-const menu = ref<{ x: number; y: number; row: CommitRow; items: MenuItem[] } | null>(null)
-const branchDialog = ref<{ from: string } | null>(null)
-const leftTab = ref<'branches' | 'working' | 'snapshots'>('branches')
+const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots'>('branches')
+
+interface MenuSpec {
+  x: number
+  y: number
+  items: MenuItem[]
+  handler: (id: string) => void
+}
+const menu = ref<MenuSpec | null>(null)
+
+interface PromptSpec {
+  title: string
+  label?: string
+  placeholder?: string
+  value?: string
+  confirmText?: string
+  secondLabel?: string
+  secondPlaceholder?: string
+  onSubmit: (value: string, second: string) => void
+}
+const prompt = ref<PromptSpec | null>(null)
 
 async function open() {
   await repo.open(pathInput.value)
@@ -42,7 +62,7 @@ const changeCount = computed(() => {
   return s.staged.length + s.unstaged.length + s.untracked.length + s.conflicted.length
 })
 
-/* ── 命令/快捷键 ── */
+/* ── 快捷键 ── */
 function onKey(e: KeyboardEvent) {
   const ctrl = e.ctrlKey || e.metaKey
 
@@ -63,15 +83,17 @@ function onKey(e: KeyboardEvent) {
   }
   if (e.key === 'Escape') {
     if (menu.value) menu.value = null
+    else if (prompt.value) prompt.value = null
     else if (showPalette.value) showPalette.value = false
     else if (showSettings.value) showSettings.value = false
-    else if (branchDialog.value) branchDialog.value = null
     else if (repo.commandOutput) repo.closeCommandOutput()
+    else if (repo.stashDiff) repo.closeStashDiff()
     else if (repo.diffFile) repo.closeDiff()
+    else if (repo.conflictFile) repo.closeConflict()
     else if (repo.search) repo.search = ''
     return
   }
-  if (showPalette.value || showSettings.value || branchDialog.value || repo.diffFile) return
+  if (showPalette.value || showSettings.value || prompt.value || repo.diffFile || repo.conflictFile) return
 
   if (e.key === 'ArrowDown') {
     e.preventDefault()
@@ -86,7 +108,7 @@ function onKey(e: KeyboardEvent) {
 }
 
 /* ── 提交右键菜单 ── */
-function onContext({ row, x, y }: { row: CommitRow; x: number; y: number }) {
+function onCommitContext({ row, x, y }: { row: CommitRow; x: number; y: number }) {
   const items: MenuItem[] = [
     { id: 'copy-sha', label: '复制 SHA', hint: row.short },
     { id: 'copy-summary', label: '复制提交说明' },
@@ -96,40 +118,133 @@ function onContext({ row, x, y }: { row: CommitRow; x: number; y: number }) {
   items.push(
     { id: 'divider1', label: '', divider: true },
     { id: 'new-branch', label: '在此提交上新建分支…' },
+    { id: 'new-tag', label: '在此提交上新建标签…' },
     { id: 'focus-here', label: '只看此提交起的历史' },
   )
-  menu.value = { x, y, row, items }
-}
 
-async function onMenuSelect(id: string) {
-  const row = menu.value?.row
-  menu.value = null
-  if (!row) return
-  if (id === 'copy-sha') {
-    await navigator.clipboard?.writeText(row.oid)
-    repo.notify('ok', '已复制 SHA')
-  } else if (id === 'copy-summary') {
-    await navigator.clipboard?.writeText(row.summary)
-    repo.notify('ok', '已复制提交说明')
-  } else if (id === 'open-file') {
-    if (repo.detail?.files.length) repo.openFileDiff(repo.detail.files[0].path)
-    else repo.notify('info', '该提交没有文件变更')
-  } else if (id === 'open-web') {
-    window.open(repo.originWeb, '_blank')
-  } else if (id === 'new-branch') {
-    branchDialog.value = { from: row.oid }
-  } else if (id === 'focus-here') {
-    repo.setTip(row.oid)
+  menu.value = {
+    x,
+    y,
+    items,
+    handler: async (id) => {
+      if (id === 'copy-sha') {
+        await navigator.clipboard?.writeText(row.oid)
+        repo.notify('ok', '已复制 SHA')
+      } else if (id === 'copy-summary') {
+        await navigator.clipboard?.writeText(row.summary)
+        repo.notify('ok', '已复制提交说明')
+      } else if (id === 'open-file') {
+        if (repo.detail?.files.length) repo.openFileDiff(repo.detail.files[0].path)
+        else repo.notify('info', '该提交没有文件变更')
+      } else if (id === 'open-web') {
+        window.open(repo.originWeb, '_blank')
+      } else if (id === 'new-branch') {
+        openNewBranch(row.oid)
+      } else if (id === 'new-tag') {
+        openCreateTag(row.oid)
+      } else if (id === 'focus-here') {
+        repo.setTip(row.oid)
+      }
+    },
   }
 }
 
-async function confirmBranch(name: string) {
-  const from = branchDialog.value?.from
-  branchDialog.value = null
-  await repo.createBranch(name, from)
+/* ── 分支/标签右键菜单 ── */
+function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
+  const isTag = ref.kind === 'tag'
+  const items: MenuItem[] = isTag
+    ? [
+        { id: 'delete-tag', label: '删除标签', danger: true },
+        { id: 'copy-name', label: '复制名称' },
+      ]
+    : [
+        { id: 'checkout', label: '检出此分支' },
+        { id: 'merge', label: '合并到当前分支' },
+        { id: 'divider', label: '', divider: true },
+        { id: 'rename', label: '重命名…' },
+        { id: 'delete', label: '删除分支', danger: true },
+        { id: 'divider2', label: '', divider: true },
+        { id: 'copy-name', label: '复制名称' },
+      ]
+
+  menu.value = {
+    x,
+    y,
+    items,
+    handler: async (id) => {
+      if (id === 'checkout') await repo.checkoutRef(ref.name)
+      else if (id === 'merge') await repo.mergeBranch(ref.name)
+      else if (id === 'copy-name') {
+        await navigator.clipboard?.writeText(ref.name)
+        repo.notify('ok', '已复制名称')
+      } else if (id === 'rename') {
+        prompt.value = {
+          title: '重命名分支',
+          label: `当前名称：${ref.name}`,
+          value: ref.name,
+          confirmText: '重命名',
+          onSubmit: (v) => repo.renameBranch(ref.name, v),
+        }
+      } else if (id === 'delete') {
+        if (!window.confirm(`确定删除分支 ${ref.name}？\n（会先自动打安全网快照）`)) return
+        await repo.deleteBranch(ref.name)
+      } else if (id === 'delete-tag') {
+        if (!window.confirm(`确定删除标签 ${ref.name}？`)) return
+        await repo.deleteTag(ref.name)
+      }
+    },
+  }
 }
 
-/* ── 主题快速切换 ── */
+/* ── 弹窗流程 ── */
+function openNewBranch(from: string) {
+  prompt.value = {
+    title: '新建分支',
+    label: '分支名（将从该提交拉出并切换）',
+    placeholder: 'feature/my-branch',
+    confirmText: '创建分支',
+    onSubmit: (name) => repo.createBranch(name, from),
+  }
+}
+
+function openCreateTag(oid?: string) {
+  prompt.value = {
+    title: '新建标签',
+    label: '标签名（如 v1.0.0）',
+    placeholder: 'v1.0.0',
+    secondLabel: '说明（留空则为轻量标签）',
+    secondPlaceholder: 'release 1.0.0',
+    confirmText: '创建标签',
+    onSubmit: (name, message) => repo.createTag(name, message || undefined, oid ?? repo.selected?.oid),
+  }
+}
+
+function openCreateStash() {
+  prompt.value = {
+    title: '新建暂存',
+    label: '描述',
+    placeholder: 'wip: 正在改登录',
+    confirmText: '创建暂存',
+    onSubmit: (message) => repo.createStash(message),
+  }
+}
+
+async function submitPrompt(value: string, second: string) {
+  const p = prompt.value
+  prompt.value = null
+  await p?.onSubmit(value, second)
+}
+
+function switchTab(t: 'branches' | 'working' | 'stashes' | 'snapshots') {
+  leftTab.value = t
+  if (t === 'stashes') repo.loadStashes()
+  if (t === 'snapshots') {
+    repo.loadSnapshots()
+    repo.loadReflog()
+  }
+}
+
+/* ── 主题 ── */
 const themeOrder = ['dark', 'midnight', 'light', 'contrast'] as const
 function cycleTheme() {
   const i = themeOrder.indexOf(settings.theme as (typeof themeOrder)[number])
@@ -175,17 +290,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
       <input
         v-model="pathInput"
-        class="field w-[320px] px-2 py-1 font-mono text-[12px]"
+        class="field w-[300px] px-2 py-1 font-mono text-[12px]"
         placeholder="仓库路径，例如 F:\\gitlab\\myrepo"
         @keydown.enter="open"
       />
       <button class="btn btn-primary" @click="open">打开</button>
 
-      <div class="relative ml-2">
+      <div class="relative ml-1">
         <input
           ref="searchInput"
           v-model="repo.search"
-          class="field w-[200px] py-1 pl-7 pr-2 text-[12px]"
+          class="field w-[180px] py-1 pl-7 pr-2 text-[12px]"
           placeholder="搜索提交 / 作者"
         />
         <span class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] t3">⌕</span>
@@ -205,32 +320,28 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         <button class="btn" title="切换主题" @click="cycleTheme">{{ settings.themeLabel }}</button>
         <button class="btn" title="设置 Ctrl+," @click="showSettings = true">设置</button>
       </div>
-
-      <span v-if="repo.loading" class="text-[11px] t3">加载中…</span>
-      <span v-if="repo.error" class="max-w-[220px] truncate text-[11px] text-rose-400">{{ repo.error }}</span>
     </header>
 
     <main v-if="repo.info" class="flex min-h-0 flex-1">
-      <div
-        class="flex h-full w-[240px] shrink-0 flex-col"
-        :style="{ borderRight: '1px solid var(--border)' }"
-      >
+      <div class="flex h-full w-[240px] shrink-0 flex-col" :style="{ borderRight: '1px solid var(--border)' }">
         <div class="flex shrink-0 items-center" :style="{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }">
           <button
-            v-for="t in (['branches', 'working', 'snapshots'] as const)"
+            v-for="t in (['branches', 'working', 'stashes', 'snapshots'] as const)"
             :key="t"
-            class="flex-1 px-2 py-1.5 text-[11px]"
+            class="flex-1 px-1 py-1.5 text-[11px]"
             :style="
               leftTab === t
                 ? { color: 'var(--text)', boxShadow: 'inset 0 -2px 0 var(--accent)' }
                 : { color: 'var(--text-mute)' }
             "
-            @click="leftTab = t; t === 'snapshots' && repo.loadSnapshots()"
+            @click="switchTab(t)"
           >
-            {{ t === 'branches' ? '分支' : t === 'working' ? '工作区' : '安全网' }}
+            {{ t === 'branches' ? '分支' : t === 'working' ? '工作区' : t === 'stashes' ? '暂存' : '安全网' }}
             <span v-if="t === 'working' && changeCount" class="ml-0.5" :style="{ color: 'var(--accent)' }">{{ changeCount }}</span>
+            <span v-else-if="t === 'stashes' && repo.stashes.length" class="ml-0.5 t3">{{ repo.stashes.length }}</span>
           </button>
         </div>
+
         <SidePanel
           v-if="leftTab === 'branches'"
           class="min-h-0 flex-1"
@@ -239,14 +350,18 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           :tip="repo.tip"
           :name="repo.info.name"
           @filter="repo.setTip($event)"
+          @context="onRefContext"
+          @create-tag="openCreateTag()"
         />
         <WorkingPanel
           v-else-if="leftTab === 'working'"
           class="min-h-0 flex-1"
           @conflict="repo.openConflict($event)"
         />
+        <StashPanel v-else-if="leftTab === 'stashes'" class="min-h-0 flex-1" @create="openCreateStash" />
         <SnapshotPanel v-else class="min-h-0 flex-1" />
       </div>
+
       <CommitList
         class="min-w-0 flex-1"
         :rows="repo.filteredRows"
@@ -254,7 +369,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         :loading="repo.loading"
         @select="repo.select($event)"
         @load-more="repo.loadMore()"
-        @context="onContext"
+        @context="onCommitContext"
       />
       <DetailPanel
         :detail="repo.detail"
@@ -293,28 +408,28 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       :loading="repo.diffLoading"
       @close="repo.closeDiff()"
     />
-    <CommandPalette
-      v-if="showPalette"
-      @close="showPalette = false"
-      @settings="showSettings = true"
-    />
+    <PatchModal />
+    <CommandPalette v-if="showPalette" @close="showPalette = false" @settings="showSettings = true" />
     <SettingsDialog v-if="showSettings" @close="showSettings = false" />
     <ContextMenu
       v-if="menu"
       :x="menu.x"
       :y="menu.y"
       :items="menu.items"
-      @select="onMenuSelect"
+      @select="(id) => { const h = menu?.handler; menu = null; h?.(id) }"
       @close="menu = null"
     />
     <InputDialog
-      v-if="branchDialog"
-      title="新建分支"
-      label="分支名（将从该提交拉出并切换）"
-      placeholder="feature/my-branch"
-      confirm-text="创建分支"
-      @confirm="confirmBranch"
-      @close="branchDialog = null"
+      v-if="prompt"
+      :title="prompt.title"
+      :label="prompt.label"
+      :placeholder="prompt.placeholder"
+      :value="prompt.value"
+      :confirm-text="prompt.confirmText"
+      :second-label="prompt.secondLabel"
+      :second-placeholder="prompt.secondPlaceholder"
+      @confirm="submitPrompt"
+      @close="prompt = null"
     />
     <CommandOutput />
 

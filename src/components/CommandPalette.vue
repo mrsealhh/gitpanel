@@ -36,6 +36,25 @@ const items = computed<Item[]>(() => {
       run: () => repo.reload(),
     },
     {
+      id: 'stash-create',
+      title: '新建暂存 (stash)',
+      group: '仓库',
+      run: () => repo.createStash(`wip ${new Date().toLocaleString()}`),
+    },
+    {
+      id: 'stash-pop',
+      title: '弹出最近一次暂存',
+      hint: repo.stashes[0]?.ref ?? '无',
+      group: '仓库',
+      run: () => repo.stashes[0] && repo.stashAction(repo.stashes[0].ref, 'pop'),
+    },
+    {
+      id: 'snapshots',
+      title: '查看安全网快照',
+      group: '仓库',
+      run: () => repo.loadSnapshots(),
+    },
+    {
       id: 'all',
       title: '查看全部提交',
       group: '仓库',

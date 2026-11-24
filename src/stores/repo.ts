@@ -6,11 +6,16 @@ import type {
   CommitRow,
   ConflictDetail,
   FileDiff,
+  MergeResult,
   PluginCommand,
+  ReflogEntry,
   RemoteInfo,
   RepoInfo,
   Snapshot,
+  Stash,
+  StashDiff,
   StatusFile,
+  TagInfo,
   WorktreeStatus,
 } from '../api/types'
 
@@ -74,12 +79,19 @@ export const useRepoStore = defineStore('repo', {
     conflictLoading: false,
     conflictFile: '',
     diffStaged: false,
+
+    // 暂存 / 标签 / reflog
+    stashes: [] as Stash[],
+    stashesLoading: false,
+    stashDiff: null as StashDiff | null,
+    tags: [] as TagInfo[],
+    reflog: [] as ReflogEntry[],
+    reflogLoading: false,
   }),
 
   getters: {
     branches: (s) => s.info?.refs.filter((r) => r.kind === 'branch' || r.kind === 'head') ?? [],
     remotesRefs: (s) => s.info?.refs.filter((r) => r.kind === 'remote') ?? [],
-    tags: (s) => s.info?.refs.filter((r) => r.kind === 'tag') ?? [],
     filteredRows: (s) => {
       const kw = s.search.trim().toLowerCase()
       if (!kw) return s.rows
@@ -442,6 +454,169 @@ export const useRepoStore = defineStore('repo', {
         this.closeConflict()
         await this.refreshStatus()
         await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    /* ─────────────── 暂存 ─────────────── */
+
+    async loadStashes() {
+      if (!this.path) return
+      this.stashesLoading = true
+      try {
+        this.stashes = (await api.stashes(this.path)).stashes
+      } catch {
+        this.stashes = []
+      } finally {
+        this.stashesLoading = false
+      }
+    },
+
+    async createStash(message: string, includeUntracked = false) {
+      if (!this.path) return
+      try {
+        await api.createStash(this.path, message, includeUntracked)
+        this.notify('ok', '已创建暂存')
+        await this.loadStashes()
+        await this.refreshStatus()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async stashAction(ref: string, action: 'apply' | 'pop' | 'drop') {
+      if (!this.path) return
+      try {
+        await api.stashAction(this.path, ref, action)
+        const label = action === 'apply' ? '已应用' : action === 'pop' ? '已弹出' : '已删除'
+        this.notify('ok', `${label} ${ref}`)
+        await this.loadStashes()
+        await this.refreshStatus()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async openStashDiff(ref: string) {
+      if (!this.path) return
+      try {
+        this.stashDiff = await api.stashDiff(this.path, ref)
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    closeStashDiff() {
+      this.stashDiff = null
+    },
+
+    /* ─────────────── 标签 ─────────────── */
+
+    async loadTags() {
+      if (!this.path) return
+      try {
+        this.tags = (await api.tags(this.path)).tags
+      } catch {
+        this.tags = []
+      }
+    },
+
+    async createTag(name: string, message?: string, oid?: string) {
+      if (!this.path) return
+      try {
+        await api.createTag(this.path, name, message, oid)
+        this.notify('ok', `已创建标签 ${name}`)
+        this.info = await api.openRepo(this.path)
+        await this.loadTags()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async deleteTag(name: string) {
+      if (!this.path) return
+      try {
+        await api.deleteTag(this.path, name)
+        this.notify('ok', `已删除标签 ${name}`)
+        this.info = await api.openRepo(this.path)
+        await this.loadTags()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    /* ─────────────── 分支操作 ─────────────── */
+
+    async mergeBranch(name: string) {
+      if (!this.path) return
+      try {
+        const r: MergeResult = await api.mergeBranch(this.path, name)
+        if (r.conflicts) {
+          this.notify('err', `合并 ${name} 产生冲突，请到工作区解决`)
+        } else {
+          this.notify('ok', `已合并 ${name}`)
+        }
+        this.info = await api.openRepo(this.path)
+        await this.refreshStatus()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async deleteBranch(name: string, force = false) {
+      if (!this.path) return
+      try {
+        await api.deleteBranch(this.path, name, force)
+        this.notify('ok', `已删除分支 ${name}`)
+        this.info = await api.openRepo(this.path)
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async renameBranch(from: string, to: string) {
+      if (!this.path) return
+      try {
+        await api.renameBranch(this.path, from, to)
+        this.notify('ok', `已重命名为 ${to}`)
+        this.info = await api.openRepo(this.path)
+        this.tip = ''
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    /* ─────────────── reflog ─────────────── */
+
+    async loadReflog() {
+      if (!this.path) return
+      this.reflogLoading = true
+      try {
+        this.reflog = (await api.reflog(this.path, 60)).entries
+      } catch {
+        this.reflog = []
+      } finally {
+        this.reflogLoading = false
+      }
+    },
+
+    async resetTo(oid: string, mode: 'soft' | 'mixed' | 'hard') {
+      if (!this.path) return
+      try {
+        await api.resetTo(this.path, oid, mode)
+        this.notify('ok', `已 ${mode} 重置到 ${oid.slice(0, 7)}（操作前已打快照）`)
+        this.info = await api.openRepo(this.path)
+        await this.refreshStatus()
+        await this.reload()
+        await this.loadReflog()
       } catch (e) {
         this.notify('err', String((e as Error).message || e))
       }

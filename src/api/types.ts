@@ -164,3 +164,42 @@ export interface ConflictDetail {
   hasMarkers: boolean
   blocks: ConflictBlock[]
 }
+
+/* ── 暂存 / 标签 / reflog ── */
+
+export interface Stash {
+  index: number
+  ref: string
+  time: number
+  message: string
+}
+
+export interface StashDiff {
+  ref: string
+  files: { path: string; additions: number; deletions: number }[]
+  patch: string
+}
+
+export interface TagInfo {
+  name: string
+  annotated: boolean
+  time: number
+  subject: string
+  oid: string
+}
+
+export interface ReflogEntry {
+  oid: string
+  short: string
+  selector: string
+  time: number
+  action: string
+}
+
+export interface MergeResult {
+  ok: boolean
+  conflicts: boolean
+  output: string
+  snapshot?: string | null
+  conflicted?: StatusFile[]
+}

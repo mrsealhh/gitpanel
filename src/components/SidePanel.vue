@@ -9,7 +9,11 @@ const props = defineProps<{
   name: string
 }>()
 
-const emit = defineEmits<{ (e: 'filter', tip: string): void }>()
+const emit = defineEmits<{
+  (e: 'filter', tip: string): void
+  (e: 'context', payload: { ref: RepoRef; x: number; y: number }): void
+  (e: 'create-tag'): void
+}>()
 
 const q = ref('')
 
@@ -26,7 +30,12 @@ const groups = computed(() => {
   ].filter((g) => g.items.length > 0)
 })
 
-const open = ref<Record<string, boolean>>({ branch: true, remote: true, tag: false })
+const open = ref<Record<string, boolean>>({ branch: true, remote: false, tag: true })
+
+function onCtx(e: MouseEvent, r: RepoRef) {
+  e.preventDefault()
+  emit('context', { ref: r, x: e.clientX, y: e.clientY })
+}
 </script>
 
 <template>
@@ -40,11 +49,7 @@ const open = ref<Record<string, boolean>>({ branch: true, remote: true, tag: fal
     </div>
 
     <div class="p-2">
-      <input
-        v-model="q"
-        placeholder="过滤分支 / 标签"
-        class="field w-full px-2 py-1 text-[12px]"
-      />
+      <input v-model="q" placeholder="过滤分支 / 标签" class="field w-full px-2 py-1 text-[12px]" />
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto pb-3">
@@ -58,14 +63,24 @@ const open = ref<Record<string, boolean>>({ branch: true, remote: true, tag: fal
       </button>
 
       <div v-for="g in groups" :key="g.key">
-        <button
-          class="flex w-full items-center gap-1 px-3 py-1 text-[11px] font-medium uppercase tracking-wide t3 hover:opacity-80"
-          @click="open[g.key] = !open[g.key]"
-        >
-          <span class="text-[9px]">{{ open[g.key] ? '▾' : '▸' }}</span>
-          {{ g.title }}
-          <span class="ml-auto opacity-60">{{ g.items.length }}</span>
-        </button>
+        <div class="flex items-center pr-2">
+          <button
+            class="flex flex-1 items-center gap-1 px-3 py-1 text-[11px] font-medium uppercase tracking-wide t3"
+            @click="open[g.key] = !open[g.key]"
+          >
+            <span class="text-[9px]">{{ open[g.key] ? '▾' : '▸' }}</span>
+            {{ g.title }}
+            <span class="ml-1 opacity-60">{{ g.items.length }}</span>
+          </button>
+          <button
+            v-if="g.key === 'tag'"
+            class="px-1 text-[12px] t3 hover:opacity-80"
+            title="新建标签"
+            @click="emit('create-tag')"
+          >
+            ＋
+          </button>
+        </div>
         <div v-show="open[g.key]">
           <button
             v-for="r in g.items"
@@ -73,6 +88,7 @@ const open = ref<Record<string, boolean>>({ branch: true, remote: true, tag: fal
             class="block w-full truncate px-5 py-[3px] text-left text-[12px] row-hover"
             :style="tip === r.name ? { color: 'var(--accent)' } : { color: 'var(--text-dim)' }"
             @click="emit('filter', r.name)"
+            @contextmenu="onCtx($event, r)"
           >
             {{ r.name }}
           </button>

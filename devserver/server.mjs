@@ -439,6 +439,40 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/restore-snapshot') {
       return send(res, 200, await ops.restoreSnapshot(body.path, body.ref))
     }
+
+    // ── 暂存 / 标签 / 分支操作 / reflog ──
+    if (url.pathname === '/api/stashes') return send(res, 200, await ops.listStashes(body.path))
+    if (url.pathname === '/api/stash-create') {
+      return send(res, 200, await ops.createStash(body.path, body.message, !!body.includeUntracked))
+    }
+    if (url.pathname === '/api/stash-action') {
+      return send(res, 200, await ops.stashAction(body.path, body.ref, body.action))
+    }
+    if (url.pathname === '/api/stash-diff') {
+      return send(res, 200, await ops.stashDiff(body.path, body.ref))
+    }
+    if (url.pathname === '/api/tags') return send(res, 200, await ops.listTags(body.path))
+    if (url.pathname === '/api/tag-create') {
+      return send(res, 200, await ops.createTag(body.path, body.name, body.message, body.oid))
+    }
+    if (url.pathname === '/api/tag-delete') {
+      return send(res, 200, await ops.deleteTag(body.path, body.name))
+    }
+    if (url.pathname === '/api/merge-branch') {
+      return send(res, 200, await ops.mergeBranch(body.path, body.name))
+    }
+    if (url.pathname === '/api/delete-branch') {
+      return send(res, 200, await ops.deleteBranch(body.path, body.name, !!body.force))
+    }
+    if (url.pathname === '/api/rename-branch') {
+      return send(res, 200, await ops.renameBranch(body.path, body.from, body.to))
+    }
+    if (url.pathname === '/api/reflog') {
+      return send(res, 200, await ops.listReflog(body.path, body.limit))
+    }
+    if (url.pathname === '/api/reset-to') {
+      return send(res, 200, await ops.resetTo(body.path, body.oid, body.mode))
+    }
     if (url.pathname === '/api/conflict') {
       return send(res, 200, await conflict.conflictDetail(body.path, body.file))
     }

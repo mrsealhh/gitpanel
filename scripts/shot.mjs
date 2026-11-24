@@ -73,10 +73,12 @@ for (const action of actions) {
     await sleep(Number(arg) || 500)
   } else if (kind === 'click') {
     const ok = await evaluate(`(() => {
-      const el = [...document.querySelectorAll('button, a, [role=button]')]
-        .find((b) => (b.textContent || '').trim().includes(${JSON.stringify(arg)}));
-      if (!el) return false;
-      el.click();
+      const all = [...document.querySelectorAll('button, a, [role=button]')]
+        .filter((b) => (b.textContent || '').trim().includes(${JSON.stringify(arg)}));
+      if (!all.length) return false;
+      // 取文本最短的（最具体的）那个，避免点到包含同样文字的大容器
+      all.sort((a, b) => a.textContent.trim().length - b.textContent.trim().length);
+      all[0].click();
       return true;
     })()`)
     if (!ok) console.warn(`[shot] 未找到可点击元素: ${arg}`)

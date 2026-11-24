@@ -3,10 +3,15 @@ import type {
   CommitDetail,
   FileDiff,
   GraphPage,
+  MergeResult,
   PluginCommand,
+  ReflogEntry,
   RemoteInfo,
   RepoInfo,
   SyncResult,
+  Stash,
+  StashDiff,
+  TagInfo,
   WorktreeStatus,
   Snapshot,
   ConflictDetail,
@@ -130,5 +135,62 @@ export const api = {
   },
   resolveSide(path: string, file: string, side: 'ours' | 'theirs'): Promise<{ ok: boolean }> {
     return post<{ ok: boolean }>('/api/resolve-side', { path, file, side })
+  },
+
+  /* ── 暂存 ── */
+  stashes(path: string): Promise<{ stashes: Stash[] }> {
+    return post<{ stashes: Stash[] }>('/api/stashes', { path })
+  },
+  createStash(
+    path: string,
+    message: string,
+    includeUntracked = false,
+  ): Promise<{ ok: boolean; output: string }> {
+    return post('/api/stash-create', { path, message, includeUntracked })
+  },
+  stashAction(
+    path: string,
+    ref: string,
+    action: 'apply' | 'pop' | 'drop',
+  ): Promise<{ ok: boolean; output: string }> {
+    return post('/api/stash-action', { path, ref, action })
+  },
+  stashDiff(path: string, ref: string): Promise<StashDiff> {
+    return post<StashDiff>('/api/stash-diff', { path, ref })
+  },
+
+  /* ── 标签 ── */
+  tags(path: string): Promise<{ tags: TagInfo[] }> {
+    return post<{ tags: TagInfo[] }>('/api/tags', { path })
+  },
+  createTag(
+    path: string,
+    name: string,
+    message?: string,
+    oid?: string,
+  ): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/tag-create', { path, name, message, oid })
+  },
+  deleteTag(path: string, name: string): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/tag-delete', { path, name })
+  },
+
+  /* ── 分支操作 ── */
+  mergeBranch(path: string, name: string): Promise<MergeResult> {
+    return post<MergeResult>('/api/merge-branch', { path, name })
+  },
+  deleteBranch(path: string, name: string, force = false): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/delete-branch', { path, name, force })
+  },
+  renameBranch(path: string, from: string, to: string): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/rename-branch', { path, from, to })
+  },
+
+  /* ── reflog / 重置 ── */
+  reflog(path: string, limit = 60): Promise<{ entries: ReflogEntry[] }> {
+    return post<{ entries: ReflogEntry[] }>('/api/reflog', { path, limit })
+  },
+  resetTo(path: string, oid: string, mode: 'soft' | 'mixed' | 'hard'): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/reset-to', { path, oid, mode })
   },
 }

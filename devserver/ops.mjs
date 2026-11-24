@@ -282,3 +282,224 @@ export async function pushRepo(repo, force) {
   const out = await makeGit(repo)(args, { timeout: SYNC_TIMEOUT })
   return { ok: true, output: out.trim() }
 }
+
+/* ────────────────────────── 暂存（stash） ────────────────────────── */
+
+const SAFE_NAME = /^[A-Za-z0-9._\-\/]+$/
+
+function assertRef(value, label = '引用名') {
+  if (!value || value.startsWith('-') || value.includes('..') || !SAFE_NAME.test(value)) {
+    throw new Error(`非法的${label}`)
+  }
+}
+
+export async function listStashes(repo) {
+  const git = makeGit(repo)
+  let out = ''
+  try {
+    out = await git(['stash', 'list', '--format=%gd%x1f%ct%x1f%gs'])
+  } catch {
+    return { stashes: [] }
+  }
+
+  const stashes = out
+    .split('\n')
+    .filter(Boolean)
+    .map((line, i) => {
+      const [ref, at, message] = line.split('\x1f')
+      return {
+        index: i,
+        ref: ref || `stash@{${i}}`,
+        time: Number(at) || 0,
+        message: message || '',
+      }
+    })
+  return { stashes }
+}
+
+export async function createStash(repo, message, includeUntracked) {
+  const git = makeGit(repo)
+  const args = ['stash', 'push']
+  if (message && message.trim()) args.push('-m', message.trim())
+  if (includeUntracked) args.push('-u')
+  const out = await git(args)
+  return { ok: true, output: out.trim() }
+}
+
+export async function stashAction(repo, ref, action) {
+  const git = makeGit(repo)
+  if (!/^stash@\{\d+\}$/.test(ref)) throw new Error('非法的 stash 引用')
+  if (action === 'apply') {
+    const out = await git(['stash', 'apply', ref])
+    return { ok: true, output: out.trim() }
+  }
+  if (action === 'pop') {
+    const out = await git(['stash', 'pop', ref])
+    return { ok: true, output: out.trim() }
+  }
+  if (action === 'drop') {
+    const out = await git(['stash', 'drop', ref])
+    return { ok: true, output: out.trim() }
+  }
+  throw new Error(`未知的 stash 操作: ${action}`)
+}
+
+export async function stashDiff(repo, ref) {
+  const git = makeGit(repo)
+  if (!/^stash@\{\d+\}$/.test(ref)) throw new Error('非法的 stash 引用')
+  let patch = ''
+  try {
+    patch = await git(['stash', 'show', '-p', '--no-color', ref])
+  } catch {
+    patch = ''
+  }
+  let numstat = ''
+  try {
+    numstat = await git(['stash', 'show', '--numstat', ref])
+  } catch {
+    numstat = ''
+  }
+  const files = numstat
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [a, d, ...rest] = line.split('\t')
+      return {
+        path: rest.join('\t'),
+        additions: a === '-' ? 0 : Number(a) || 0,
+        deletions: d === '-' ? 0 : Number(d) || 0,
+      }
+    })
+  return { ref, files, patch }
+}
+
+/* ────────────────────────── 标签 ────────────────────────── */
+
+export async function listTags(repo) {
+  const git = makeGit(repo)
+  let out = ''
+  try {
+    out = await git([
+      'for-each-ref',
+      '--format=%(refname:short)%1f%(objecttype)%1f%(taggerdate:unix)%1f%(subject)%1f%(*objectname)%1f%(objectname)',
+      'refs/tags',
+    ])
+  } catch {
+    return { tags: [] }
+  }
+
+  const tags = out
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [name, type, at, subject, peeled, oid] = line.split('\x1f')
+      return {
+        name,
+        annotated: type === 'tag',
+        time: Number(at) || 0,
+        subject: subject || '',
+        oid: peeled || oid,
+      }
+    })
+    .sort((a, b) => b.time - a.time)
+
+  return { tags }
+}
+
+export async function createTag(repo, name, message, oid) {
+  assertRef(name, '标签名')
+  const git = makeGit(repo)
+  const args = ['tag']
+  if (message && message.trim()) args.push('-a', '-m', message.trim())
+  args.push(name)
+  if (oid) {
+    if (!/^[0-9a-f]{4,40}$/i.test(oid)) throw new Error('非法的提交')
+    args.push(oid)
+  }
+  await git(args)
+  return { ok: true }
+}
+
+export async function deleteTag(repo, name) {
+  assertRef(name, '标签名')
+  await makeGit(repo)(['tag', '-d', name])
+  return { ok: true }
+}
+
+/* ────────────────────────── 分支操作 ────────────────────────── */
+
+export async function mergeBranch(repo, name) {
+  assertRef(name, '分支名')
+  const git = makeGit(repo)
+  const snap = await createSnapshot(repo, 'before-merge')
+
+  const current = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+  if (current === name) throw new Error('不能合并当前分支到自己')
+
+  try {
+    const out = await git(['merge', '--no-ff', '--no-edit', name])
+    return { ok: true, conflicts: false, output: out.trim(), snapshot: snap }
+  } catch (e) {
+    const st = await worktreeStatus(repo)
+    return {
+      ok: false,
+      conflicts: st.conflicted.length > 0,
+      output: String(e.stderr || e.message || '').trim(),
+      snapshot: snap,
+      conflicted: st.conflicted,
+    }
+  }
+}
+
+export async function deleteBranch(repo, name, force) {
+  assertRef(name, '分支名')
+  const git = makeGit(repo)
+  const current = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+  if (current === name) throw new Error('不能删除当前所在分支')
+  const snap = await createSnapshot(repo, 'before-delete-branch')
+  await git(['branch', force ? '-D' : '-d', name])
+  return { ok: true, snapshot: snap }
+}
+
+export async function renameBranch(repo, from, to) {
+  assertRef(from, '分支名')
+  assertRef(to, '分支名')
+  await makeGit(repo)(['branch', '-m', from, to])
+  return { ok: true }
+}
+
+/* ────────────────────────── reflog / 重置 ────────────────────────── */
+
+export async function listReflog(repo, limit = 60) {
+  const git = makeGit(repo)
+  let out = ''
+  try {
+    out = await git(['reflog', '--format=%H%x1f%gd%x1f%ct%x1f%gs', '-n', String(limit)])
+  } catch {
+    return { entries: [] }
+  }
+
+  const entries = out
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [oid, selector, at, action] = line.split('\x1f')
+      return {
+        oid,
+        short: oid.slice(0, 7),
+        selector,
+        time: Number(at) || 0,
+        action: action || '',
+      }
+    })
+
+  return { entries }
+}
+
+export async function resetTo(repo, oid, mode) {
+  if (!/^[0-9a-f]{4,40}$/i.test(oid)) throw new Error('非法的提交')
+  if (!['soft', 'mixed', 'hard'].includes(mode)) throw new Error('非法的重置模式')
+  const snap = await createSnapshot(repo, `before-reset-${mode}`)
+  await makeGit(repo)(['reset', `--${mode}`, oid])
+  return { ok: true, snapshot: snap }
+}
