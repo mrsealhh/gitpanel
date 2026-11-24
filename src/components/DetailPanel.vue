@@ -7,7 +7,15 @@ defineProps<{
   loading?: boolean
 }>()
 
-const emit = defineEmits<{ (e: 'open-file', file: string): void }>()
+const emit = defineEmits<{
+  (e: 'open-file', file: string): void
+  (e: 'file-context', payload: { file: string; x: number; y: number }): void
+}>()
+
+function onCtx(e: MouseEvent, file: string) {
+  e.preventDefault()
+  emit('file-context', { file, x: e.clientX, y: e.clientY })
+}
 
 function statusColor(s: string) {
   if (s === 'A') return 'var(--badge-head-fg)'
@@ -57,6 +65,7 @@ function statusColor(s: string) {
           :key="f.path"
           class="row-hover flex cursor-pointer items-center gap-2 px-4 py-[5px] text-[12px]"
           @click="emit('open-file', f.path)"
+          @contextmenu="onCtx($event, f.path)"
         >
           <span class="w-3 shrink-0 font-mono text-[10px]" :style="{ color: statusColor(f.status) }">{{ f.status }}</span>
           <span class="min-w-0 flex-1 truncate font-mono t2">{{ f.path }}</span>

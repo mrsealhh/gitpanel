@@ -469,6 +469,292 @@ export async function renameBranch(repo, from, to) {
   return { ok: true }
 }
 
+/* ────────────────────────── 工作树（worktree） ────────────────────────── */
+
+const AI_HINT_FILES = ['AGENTS.md', 'CLAUDE.md', '.cursor', '.github/copilot-instructions.md']
+
+function parseWorktreeList(out) {
+  const entries = []
+  let cur = null
+  for (const line of out.split('\n')) {
+    if (line.startsWith('worktree ')) {
+      if (cur) entries.push(cur)
+      cur = { path: line.slice('worktree '.length), head: '', branch: '', bare: false, detached: false, locked: false, prunable: false }
+    } else if (!cur) {
+      continue
+    } else if (line.startsWith('HEAD ')) {
+      cur.head = line.slice(5)
+    } else if (line.startsWith('branch ')) {
+      cur.branch = line.slice(7).replace(/^refs\/heads\//, '')
+    } else if (line === 'bare') {
+      cur.bare = true
+    } else if (line === 'detached') {
+      cur.detached = true
+    } else if (line.startsWith('locked')) {
+      cur.locked = true
+    } else if (line.startsWith('prunable')) {
+      cur.prunable = true
+    }
+  }
+  if (cur) entries.push(cur)
+  return entries
+}
+
+/** 列出所有工作树，并补充脏文件数 / ahead·behind / 最近提交时间 / AI 配置标记 */
+export async function listWorktrees(repo) {
+  const git = makeGit(repo)
+  const raw = await git(['worktree', 'list', '--porcelain'])
+  const entries = parseWorktreeList(raw)
+
+  const enriched = await Promise.all(
+    entries.map(async (wt) => {
+      const item = {
+        path: wt.path.replace(/\\/g, '/'),
+        head: wt.head,
+        short: wt.head.slice(0, 7),
+        branch: wt.branch || (wt.detached ? '（分离头指针）' : ''),
+        bare: wt.bare,
+        detached: wt.detached,
+        locked: wt.locked,
+        prunable: wt.prunable,
+        isCurrent: path.resolve(wt.path) === path.resolve(repo),
+        exists: fs.existsSync(wt.path),
+        dirty: 0,
+        ahead: 0,
+        behind: 0,
+        lastCommit: 0,
+        aiHints: [],
+      }
+
+      if (item.exists && !item.bare) {
+        try {
+          const st = await makeGit(wt.path)(['status', '--porcelain=v2', '--branch', '-uno'])
+          const parsed = parseStatus(st)
+          item.dirty = parsed.staged.length + parsed.unstaged.length + parsed.conflicted.length
+          item.ahead = parsed.ahead
+          item.behind = parsed.behind
+        } catch {
+          /* 忽略单个工作树的读取失败 */
+        }
+        try {
+          const t = await makeGit(wt.path)(['log', '-1', '--format=%ct'])
+          item.lastCommit = Number(t.trim()) || 0
+        } catch {
+          /* 空仓库 */
+        }
+        item.aiHints = AI_HINT_FILES.filter((f) => fs.existsSync(path.join(wt.path, f)))
+      }
+
+      return item
+    }),
+  )
+
+  return { worktrees: enriched }
+}
+
+export async function addWorktree(repo, opts) {
+  const git = makeGit(repo)
+  const target = path.resolve(String(opts.target || ''))
+  if (!target) throw new Error('缺少工作树路径')
+  if (fs.existsSync(target)) throw new Error('目标目录已存在')
+  if (target.includes(`${path.sep}.git${path.sep}`)) throw new Error('不能建在 .git 目录里')
+
+  const args = ['worktree', 'add']
+  if (opts.newBranch) {
+    assertRef(opts.branch, '分支名')
+    args.push('-b', opts.branch)
+    args.push(target)
+    args.push(opts.base && String(opts.base).trim() ? String(opts.base).trim() : 'HEAD')
+  } else {
+    if (!opts.branch) throw new Error('缺少分支名')
+    args.push(target, opts.branch)
+  }
+
+  await git(args)
+  return { ok: true, path: target.replace(/\\/g, '/') }
+}
+
+export async function removeWorktree(repo, wtPath, force) {
+  const target = path.resolve(String(wtPath || ''))
+  if (path.resolve(repo) === target) throw new Error('不能移除当前正在使用的工作树')
+  const args = ['worktree', 'remove']
+  if (force) args.push('--force')
+  args.push(target)
+  await makeGit(repo)(args)
+  return { ok: true }
+}
+
+export async function pruneWorktrees(repo) {
+  const out = await makeGit(repo)(['worktree', 'prune', '-v'])
+  return { ok: true, output: out.trim() }
+}
+
+/* ────────────────────────── 文件历史 / Blame / 体检 ────────────────────────── */
+
+export async function fileHistory(repo, file, limit = 200) {
+  if (!file || file.startsWith('-')) throw new Error('非法的文件路径')
+  const git = makeGit(repo)
+  const out = await git([
+    'log',
+    '--follow',
+    `--max-count=${Math.min(500, Math.max(1, limit))}`,
+    '--format=%H%x1f%s%x1f%an%x1f%ct',
+    '--',
+    file,
+  ])
+  return {
+    file,
+    commits: out
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [oid, subject, author, at] = line.split('\x1f')
+        return { oid, short: oid.slice(0, 7), subject: subject || '', author: author || '', time: Number(at) || 0 }
+      }),
+  }
+}
+
+export async function blameFile(repo, file, max = 2000) {
+  const git = makeGit(repo)
+  const out = await git(['blame', '--line-porcelain', '--', file])
+  const limit = Math.min(5000, Math.max(1, max))
+  const lines = []
+  let oid = ''
+  let author = ''
+  let time = 0
+  let lineNo = 0
+
+  for (const raw of out.split('\n')) {
+    if (raw.startsWith('\t')) {
+      if (lines.length < limit) {
+        lines.push({ line: lineNo, oid, short: oid.slice(0, 7), author, time, content: raw.slice(1) })
+      }
+      continue
+    }
+    if (raw.startsWith('author ')) author = raw.slice(7)
+    else if (raw.startsWith('author-time ')) time = Number(raw.slice(12)) || 0
+    else if (raw.length > 40 && raw[40] === ' ') {
+      const head = raw.split(' ')
+      if (head.length >= 3 && /^[0-9a-f]{40}$/.test(head[0])) {
+        oid = head[0]
+        lineNo = Number(head[2]) || 0
+      }
+    }
+  }
+  return { file, lines, truncated: lines.length >= limit }
+}
+
+function dirSize(p) {
+  let total = 0
+  try {
+    for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+      const full = path.join(p, e.name)
+      try {
+        if (e.isDirectory()) total += dirSize(full)
+        else total += fs.statSync(full).size
+      } catch {
+        /* 忽略单个文件 */
+      }
+    }
+  } catch {
+    /* 忽略 */
+  }
+  return total
+}
+
+export async function repoHealth(repo) {
+  const git = makeGit(repo)
+  const safe = async (args) => {
+    try {
+      return await git(args)
+    } catch {
+      return ''
+    }
+  }
+
+  let gitSize = 0
+  let packSize = 0
+  let packCount = 0
+  const large = []
+
+  const gitDir = (await safe(['rev-parse', '--absolute-git-dir'])).trim()
+  if (gitDir) {
+    gitSize = dirSize(gitDir)
+    const packDir = path.join(gitDir, 'objects', 'pack')
+    let files = []
+    try {
+      files = fs.readdirSync(packDir)
+    } catch {
+      files = []
+    }
+    const packs = files.filter((f) => f.endsWith('.pack'))
+    const idxs = files.filter((f) => f.endsWith('.idx'))
+    for (const f of packs) {
+      try {
+        packSize += fs.statSync(path.join(packDir, f)).size
+      } catch {
+        /* ignore */
+      }
+    }
+    for (const idx of idxs.slice(0, 3)) {
+      const out = await safe(['verify-pack', '-v', path.join(packDir, idx)])
+      for (const line of out.split('\n')) {
+        const f = line.trim().split(/\s+/)
+        if (f.length >= 5 && f[1] === 'blob') {
+          const size = Number(f[2]) || 0
+          if (size > 0) large.push({ oid: f[0], short: f[0].slice(0, 7), size })
+        }
+      }
+    }
+    large.sort((a, b) => b.size - a.size)
+    large.length = Math.min(large.length, 8)
+
+    packCount = idxs.length
+  }
+
+  const counts = await safe(['count-objects', '-v'])
+  let loose = 0
+  let inPack = 0
+  let garbage = 0
+  let sizePackKb = 0
+  for (const line of counts.split('\n')) {
+    const [k, v] = line.trim().split(/\s+/)
+    if (k === 'count:') loose = Number(v) || 0
+    else if (k === 'in-pack:') inPack = Number(v) || 0
+    else if (k === 'garbage:') garbage = Number(v) || 0
+    else if (k === 'size-pack:') sizePackKb = Number(v) || 0
+  }
+  if (!packSize) packSize = sizePackKb * 1024
+
+  const commits = Number((await safe(['rev-list', '--count', '--all'])).trim()) || 0
+  const branches = (await safe(['for-each-ref', '--format=%(refname)', 'refs/heads'])).split('\n').filter(Boolean).length
+  const tags = (await safe(['for-each-ref', '--format=%(refname)', 'refs/tags'])).split('\n').filter(Boolean).length
+  const files = (await safe(['ls-files'])).split('\n').filter(Boolean).length
+
+  const suggestions = []
+  if (garbage > 0) suggestions.push(`有 ${garbage} 个垃圾对象，建议执行 git gc`)
+  if (loose > 5000) suggestions.push(`松散对象 ${loose} 个，git gc 可明显提速`)
+  if (large.length && large[0].size > 20 * 1024 * 1024) {
+    suggestions.push(`历史中存在超大对象 ${large[0].short}（${(large[0].size / 1048576).toFixed(1)} MB），可考虑 git filter-repo 清理`)
+  }
+  if (typeof packCount === 'number' && packCount > 10) suggestions.push(`pack 文件 ${packCount} 个，gc 后可合并`)
+
+  return {
+    gitSize,
+    packSize,
+    packCount,
+    looseObjects: loose,
+    inPack,
+    garbage,
+    commits,
+    branches,
+    tags,
+    files,
+    largeObjects: large,
+    suggestions,
+  }
+}
+
 /* ────────────────────────── 交互式 rebase ────────────────────────── */
 
 const SAFE_ACTION = new Set(['pick', 'reword', 'edit', 'squash', 'fixup', 'drop'])
@@ -580,9 +866,19 @@ export async function rebaseStatus(repo) {
       const abs = path.isAbsolute(rel) ? rel : path.join(repo, rel)
       if (fs.existsSync(abs)) {
         const st = await worktreeStatus(repo)
+        // edit 暂停：stopped-sha 存在；msg 里是正在处理的提交说明
+        const stopped = fs.existsSync(path.join(abs, 'stopped-sha'))
+        let subject = ''
+        try {
+          subject = fs.readFileSync(path.join(abs, 'msg'), 'utf8').trim().split('\n')[0] || ''
+        } catch {
+          subject = ''
+        }
         return {
           inProgress: true,
           kind: dir,
+          stopped,
+          subject,
           conflicts: st.conflicted.length > 0,
           conflicted: st.conflicted,
         }
@@ -591,7 +887,7 @@ export async function rebaseStatus(repo) {
       /* 忽略 */
     }
   }
-  return { inProgress: false, conflicts: false, conflicted: [] }
+  return { inProgress: false, stopped: false, subject: '', conflicts: false, conflicted: [] }
 }
 
 export async function rebaseAction(repo, action) {

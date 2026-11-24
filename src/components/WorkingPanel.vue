@@ -56,9 +56,18 @@ function open(f: StatusFile, staged: boolean) {
       :style="{ background: 'rgba(251,146,60,.10)' }"
     >
       <div class="flex items-center gap-2">
-        <span class="text-[11px] font-medium" style="color: #fb923c">变基进行中</span>
+        <span class="text-[11px] font-medium" style="color: #fb923c">
+          {{ repo.rebaseStatus.stopped && !repo.rebaseStatus.conflicts ? '变基已暂停' : '变基进行中' }}
+        </span>
         <span v-if="repo.rebaseStatus.conflicts" class="text-[10px]" style="color: #fb923c">
           {{ repo.rebaseStatus.conflicted.length }} 个冲突待解决
+        </span>
+        <span
+          v-else-if="repo.rebaseStatus.stopped && repo.rebaseStatus.subject"
+          class="min-w-0 flex-1 truncate text-[10px] t3"
+          :title="repo.rebaseStatus.subject"
+        >
+          {{ repo.rebaseStatus.subject }}
         </span>
         <div class="ml-auto flex gap-1">
           <button

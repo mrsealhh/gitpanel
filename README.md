@@ -16,9 +16,13 @@
 |---|---|
 | ![工作区](docs/screenshot-working.png) | ![冲突](docs/screenshot-conflict.png) |
 
-| 交互式 rebase |
+| 交互式 rebase | 工作树（AI 并行副本） |
+|---|---|
+| ![rebase](docs/screenshot-rebase.png) | ![worktree](docs/screenshot-worktree.png) |
+
+| 仓库体检 |
 |---|
-| ![rebase](docs/screenshot-rebase.png) |
+| ![health](docs/screenshot-health.png) |
 
 ![桌面版（无边框窗口）](docs/screenshot-desktop.png)
 
@@ -61,7 +65,12 @@
 - **分支操作**：检出、合并到当前、重命名、删除（右键菜单）
 - **撤销**：reflog 时间线，支持 soft / mixed / hard 重置到任意历史点
 - **交互式 rebase**：拖拽重排提交，逐条设置保留 / 合并(squash) / 合并丢说明(fixup) / 丢弃 / 暂停编辑；
-  变基遇到冲突时工作区顶部出现「继续 / 跳过 / 中止」，解决后接着跑
+  变基遇到冲突或 edit 暂停时工作区顶部出现状态条（显示当前提交），解决后继续 / 跳过 / 中止
+- **工作树（worktree）**：一处查看所有并行工作副本——分支、脏文件数、ahead/behind、最近活动、
+  是否带 AI 配置（AGENTS.md / CLAUDE.md / .cursor）；一键新建（自动拉分支）、打开、复制路径、移除、清理失效项
+- **文件历史**：单文件提交历史（`--follow` 跟随重命名），点任意一条直接看该提交里这个文件的并排 Diff
+- **Blame**：逐行归属，相邻同一提交共用底色，悬停看作者与时间
+- **仓库体检**：`.git`/pack 体积、松散对象、垃圾对象、提交/分支/标签/文件数、历史最大对象与优化建议
 
 ## 技术栈
 
@@ -276,8 +285,11 @@ layout synth : 188–283 ms   100000 rows, 223531 segments
 - [x] Tauri 2 桌面壳（无边框标题栏 / 缩放 / 托盘 / 安装包 2.6MB）
 - [x] 多项目记忆（SQLite）+ 更新检查 + 图标化工具条
 - [x] 一键/静默更新（minisign 签名 + GitHub Releases 自动发版）
-- [x] 交互式 rebase（拖拽重排 / squash / fixup / drop + 冲突续做）
-- [ ] 交互式 rebase 的「暂停编辑」动作 UI（edit 需手动 commit 后继续）
+- [x] 交互式 rebase（拖拽重排 / squash / fixup / drop + 冲突与 edit 暂停续做）
+- [x] 工作树管理（并行副本一览 / 新建 / 移除 / 清理）
+- [x] 文件历史 / Blame / 仓库体检
+- [ ] 交互式 rebase 的「暂停编辑」后一键 amend 提交
+- [ ] 工作树与 AI 会话的关联（记录每个副本对应哪个 agent）
 
 ## 内核一致性
 

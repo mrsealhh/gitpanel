@@ -155,6 +155,8 @@ pub struct RebaseOutcome {
 #[serde(rename_all = "camelCase")]
 pub struct RebaseStatus {
     pub in_progress: bool,
+    pub stopped: bool,
+    pub subject: String,
     pub conflicts: bool,
     pub conflicted: Vec<StatusFile>,
 }
@@ -1042,8 +1044,15 @@ impl Repo {
                 };
                 if abs.exists() {
                     let st = self.worktree_status()?;
+                    let stopped = abs.join("stopped-sha").exists();
+                    let subject = fs::read_to_string(abs.join("msg"))
+                        .ok()
+                        .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+                        .unwrap_or_default();
                     return Ok(RebaseStatus {
                         in_progress: true,
+                        stopped,
+                        subject,
                         conflicts: !st.conflicted.is_empty(),
                         conflicted: st.conflicted,
                     });
@@ -1052,6 +1061,8 @@ impl Repo {
         }
         Ok(RebaseStatus {
             in_progress: false,
+            stopped: false,
+            subject: String::new(),
             conflicts: false,
             conflicted: Vec::new(),
         })
@@ -1080,6 +1091,415 @@ impl Repo {
             snapshot: None,
         })
     }
+
+    /* ── 工作树 ── */
+
+    pub fn worktrees(&self) -> Result<Vec<WorktreeInfo>> {
+        let out = git(self.path(), &["worktree", "list", "--porcelain"])?;
+        let mut list = parse_worktree_list(&out);
+        let current = norm_path(&self.path().to_string_lossy());
+
+        for wt in list.iter_mut() {
+            wt.is_current = wt.path.eq_ignore_ascii_case(&current);
+            wt.exists = std::path::Path::new(&wt.path).exists();
+            if !wt.exists || wt.bare {
+                continue;
+            }
+
+            let wt_path = std::path::PathBuf::from(&wt.path);
+            if let Some(st) = git_allow_fail(&wt_path, &["status", "--porcelain=v2", "--branch", "-uno"]) {
+                let parsed = parse_status(&st);
+                wt.dirty =
+                    (parsed.staged.len() + parsed.unstaged.len() + parsed.conflicted.len()) as u32;
+                wt.ahead = parsed.ahead;
+                wt.behind = parsed.behind;
+            }
+            if let Some(t) = git_allow_fail(&wt_path, &["log", "-1", "--format=%ct"]) {
+                wt.last_commit = t.trim().parse().unwrap_or(0);
+            }
+            wt.ai_hints = AI_HINT_FILES
+                .iter()
+                .filter(|f| wt_path.join(f).exists())
+                .map(|f| f.to_string())
+                .collect();
+        }
+
+        Ok(list)
+    }
+
+    pub fn add_worktree(&self, target: &str, branch: &str, new_branch: bool, base: &str) -> Result<String> {
+        if !crate::actions::valid_ref(branch) {
+            bail!("非法的分支名");
+        }
+        let raw = std::path::Path::new(target);
+        let abs = if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            self.path().join(raw)
+        };
+        if abs.exists() {
+            bail!("目标目录已存在");
+        }
+
+        let abs_s = abs.to_string_lossy().to_string();
+        let mut args: Vec<&str> = vec!["worktree", "add"];
+        if new_branch {
+            args.push("-b");
+            args.push(branch);
+            args.push(&abs_s);
+            args.push(if base.trim().is_empty() { "HEAD" } else { base.trim() });
+        } else {
+            args.push(&abs_s);
+            args.push(branch);
+        }
+
+        git(self.path(), &args)?;
+        Ok(norm_path(&abs_s))
+    }
+
+    pub fn remove_worktree(&self, target: &str, force: bool) -> Result<()> {
+        let current = norm_path(&self.path().to_string_lossy());
+        if norm_path(target).eq_ignore_ascii_case(&current) {
+            bail!("不能移除当前正在使用的工作树");
+        }
+        let mut args: Vec<&str> = vec!["worktree", "remove"];
+        if force {
+            args.push("--force");
+        }
+        args.push(target);
+        git(self.path(), &args)?;
+        Ok(())
+    }
+
+    pub fn prune_worktrees(&self) -> Result<String> {
+        Ok(git(self.path(), &["worktree", "prune", "-v"])?.trim().to_string())
+    }
+
+    /* ── 文件历史 / Blame / 仓库体检 ── */
+
+    pub fn file_history(&self, file: &str, limit: usize) -> Result<Vec<FileHistoryEntry>> {
+        let n = limit.clamp(1, 500).to_string();
+        let out = git(
+            self.path(),
+            &[
+                "log",
+                "--follow",
+                "--max-count",
+                &n,
+                "--format=%H%x1f%s%x1f%an%x1f%ct",
+                "--",
+                file,
+            ],
+        )?;
+
+        Ok(out
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|line| {
+                let mut it = line.split('\u{1f}');
+                let oid = it.next().unwrap_or("").to_string();
+                FileHistoryEntry {
+                    short: oid.chars().take(7).collect(),
+                    oid,
+                    subject: it.next().unwrap_or("").to_string(),
+                    author: it.next().unwrap_or("").to_string(),
+                    time: it.next().unwrap_or("0").parse().unwrap_or(0),
+                }
+            })
+            .collect())
+    }
+
+    pub fn blame(&self, file: &str, max: usize) -> Result<Vec<BlameLine>> {
+        let out = git(self.path(), &["blame", "--line-porcelain", "--", file])?;
+        let limit = max.clamp(1, 5000);
+        let mut lines: Vec<BlameLine> = Vec::new();
+        let mut oid = String::new();
+        let mut author = String::new();
+        let mut time = 0i64;
+        let mut line_no = 0u32;
+
+        for raw in out.lines() {
+            if let Some(content) = raw.strip_prefix('\t') {
+                if lines.len() < limit {
+                    lines.push(BlameLine {
+                        line: line_no,
+                        short: oid.chars().take(7).collect(),
+                        oid: oid.clone(),
+                        author: author.clone(),
+                        time,
+                        content: content.to_string(),
+                    });
+                }
+                continue;
+            }
+            if let Some(rest) = raw.strip_prefix("author ") {
+                author = rest.to_string();
+            } else if let Some(rest) = raw.strip_prefix("author-time ") {
+                time = rest.trim().parse().unwrap_or(0);
+            } else if raw.len() > 40 && raw.as_bytes()[40] == b' ' {
+                let head: Vec<&str> = raw.split(' ').collect();
+                if head.len() >= 3
+                    && head[0].len() == 40
+                    && head[0].chars().all(|c| c.is_ascii_hexdigit())
+                {
+                    oid = head[0].to_string();
+                    line_no = head[2].parse().unwrap_or(0);
+                }
+            }
+        }
+
+        Ok(lines)
+    }
+
+    pub fn repo_health(&self) -> Result<RepoHealth> {
+        let mut git_size = 0u64;
+        let mut pack_size = 0u64;
+        let mut pack_count = 0u32;
+        let mut large_objects: Vec<LargeObject> = Vec::new();
+
+        if let Some(dir) = git_allow_fail(self.path(), &["rev-parse", "--absolute-git-dir"]) {
+            let root = std::path::PathBuf::from(dir.trim());
+            git_size = dir_size(&root);
+
+            let pack_dir = root.join("objects").join("pack");
+            let mut idxs: Vec<std::path::PathBuf> = Vec::new();
+            if let Ok(entries) = fs::read_dir(&pack_dir) {
+                for e in entries.flatten() {
+                    let p = e.path();
+                    match p.extension().and_then(|s| s.to_str()) {
+                        Some("pack") => pack_size += e.metadata().map(|m| m.len()).unwrap_or(0),
+                        Some("idx") => idxs.push(p),
+                        _ => {}
+                    }
+                }
+            }
+            pack_count = idxs.len() as u32;
+
+            // 只解析前 3 个包，避免超大仓库把界面卡住
+            for idx in idxs.iter().take(3) {
+                let arg = idx.to_string_lossy().to_string();
+                if let Some(out) = git_allow_fail(self.path(), &["verify-pack", "-v", &arg]) {
+                    for line in out.lines() {
+                        let f: Vec<&str> = line.split_whitespace().collect();
+                        if f.len() >= 5 && f[1] == "blob" {
+                            if let Ok(sz) = f[2].parse::<u64>() {
+                                large_objects.push(LargeObject {
+                                    oid: f[0].to_string(),
+                                    short: f[0].chars().take(7).collect(),
+                                    size: sz,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        large_objects.sort_by(|a, b| b.size.cmp(&a.size));
+        large_objects.truncate(8);
+
+        let mut loose = 0u32;
+        let mut in_pack = 0u32;
+        let mut garbage = 0u32;
+        let mut size_pack_kb = 0u64;
+        if let Some(out) = git_allow_fail(self.path(), &["count-objects", "-v"]) {
+            for line in out.lines() {
+                let mut it = line.split_whitespace();
+                let key = it.next().unwrap_or("");
+                let val = it.next().unwrap_or("0");
+                match key {
+                    "count:" => loose = val.parse().unwrap_or(0),
+                    "in-pack:" => in_pack = val.parse().unwrap_or(0),
+                    "garbage:" => garbage = val.parse().unwrap_or(0),
+                    "size-pack:" => size_pack_kb = val.parse().unwrap_or(0),
+                    _ => {}
+                }
+            }
+        }
+        if pack_size == 0 {
+            pack_size = size_pack_kb * 1024;
+        }
+
+        let commits = git_allow_fail(self.path(), &["rev-list", "--count", "--all"])
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        let branches = git_allow_fail(self.path(), &["for-each-ref", "--format=%(refname)", "refs/heads"])
+            .map(|s| s.lines().count() as u32)
+            .unwrap_or(0);
+        let tags = git_allow_fail(self.path(), &["for-each-ref", "--format=%(refname)", "refs/tags"])
+            .map(|s| s.lines().count() as u32)
+            .unwrap_or(0);
+        let files = git_allow_fail(self.path(), &["ls-files"])
+            .map(|s| s.lines().count() as u32)
+            .unwrap_or(0);
+
+        let mut suggestions: Vec<String> = Vec::new();
+        if garbage > 0 {
+            suggestions.push(format!("有 {garbage} 个垃圾对象，建议执行 git gc"));
+        }
+        if loose > 5000 {
+            suggestions.push(format!("松散对象 {loose} 个，git gc 可明显提速"));
+        }
+        if let Some(l) = large_objects.first() {
+            if l.size > 20 * 1024 * 1024 {
+                suggestions.push(format!(
+                    "历史中存在超大对象 {}（{:.1} MB），可考虑 git filter-repo 清理",
+                    l.short,
+                    l.size as f64 / 1_048_576.0
+                ));
+            }
+        }
+        if pack_count > 10 {
+            suggestions.push(format!("pack 文件 {pack_count} 个，gc 后可合并"));
+        }
+
+        Ok(RepoHealth {
+            git_size,
+            pack_size,
+            pack_count,
+            loose_objects: loose,
+            in_pack,
+            garbage,
+            commits,
+            branches,
+            tags,
+            files,
+            large_objects,
+            suggestions,
+        })
+    }
+}
+
+/* ────────────────────────── 工作树 ────────────────────────── */
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub head: String,
+    pub short: String,
+    pub branch: String,
+    pub bare: bool,
+    pub detached: bool,
+    pub locked: bool,
+    pub prunable: bool,
+    pub is_current: bool,
+    pub exists: bool,
+    pub dirty: u32,
+    pub ahead: u32,
+    pub behind: u32,
+    pub last_commit: i64,
+    pub ai_hints: Vec<String>,
+}
+
+const AI_HINT_FILES: [&str; 4] = ["AGENTS.md", "CLAUDE.md", ".cursor", ".github/copilot-instructions.md"];
+
+fn norm_path(p: &str) -> String {
+    p.replace('\\', "/").trim_end_matches('/').to_string()
+}
+
+fn parse_worktree_list(out: &str) -> Vec<WorktreeInfo> {
+    let mut list: Vec<WorktreeInfo> = Vec::new();
+    for line in out.lines() {
+        if let Some(rest) = line.strip_prefix("worktree ") {
+            list.push(WorktreeInfo {
+                path: norm_path(rest),
+                head: String::new(),
+                short: String::new(),
+                branch: String::new(),
+                bare: false,
+                detached: false,
+                locked: false,
+                prunable: false,
+                is_current: false,
+                exists: false,
+                dirty: 0,
+                ahead: 0,
+                behind: 0,
+                last_commit: 0,
+                ai_hints: Vec::new(),
+            });
+        } else if let Some(cur) = list.last_mut() {
+            if let Some(rest) = line.strip_prefix("HEAD ") {
+                cur.head = rest.to_string();
+                cur.short = rest.chars().take(7).collect();
+            } else if let Some(rest) = line.strip_prefix("branch ") {
+                cur.branch = rest.trim_start_matches("refs/heads/").to_string();
+            } else if line == "bare" {
+                cur.bare = true;
+            } else if line == "detached" {
+                cur.detached = true;
+            } else if line.starts_with("locked") {
+                cur.locked = true;
+            } else if line.starts_with("prunable") {
+                cur.prunable = true;
+            }
+        }
+    }
+    list
+}
+
+/* ────────────────────────── 文件历史 / Blame / 体检 ────────────────────────── */
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHistoryEntry {
+    pub oid: String,
+    pub short: String,
+    pub subject: String,
+    pub author: String,
+    pub time: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlameLine {
+    pub line: u32,
+    pub oid: String,
+    pub short: String,
+    pub author: String,
+    pub time: i64,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LargeObject {
+    pub oid: String,
+    pub short: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoHealth {
+    pub git_size: u64,
+    pub pack_size: u64,
+    pub pack_count: u32,
+    pub loose_objects: u32,
+    pub in_pack: u32,
+    pub garbage: u32,
+    pub commits: u32,
+    pub branches: u32,
+    pub tags: u32,
+    pub files: u32,
+    pub large_objects: Vec<LargeObject>,
+    pub suggestions: Vec<String>,
+}
+
+fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            total += dir_size(&entry.path());
+        } else {
+            total += meta.len();
+        }
+    }
+    total
 }
 
 #[cfg(test)]

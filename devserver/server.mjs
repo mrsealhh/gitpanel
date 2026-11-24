@@ -474,6 +474,29 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await ops.resetTo(body.path, body.oid, body.mode))
     }
 
+    // ── 工作树 ──
+    if (url.pathname === '/api/worktrees') return send(res, 200, await ops.listWorktrees(body.path))
+    if (url.pathname === '/api/worktree-add') {
+      return send(res, 200, await ops.addWorktree(body.path, body))
+    }
+    if (url.pathname === '/api/worktree-remove') {
+      return send(res, 200, await ops.removeWorktree(body.path, body.target, !!body.force))
+    }
+    if (url.pathname === '/api/worktree-prune') {
+      return send(res, 200, await ops.pruneWorktrees(body.path))
+    }
+
+    // ── 文件历史 / Blame / 体检 ──
+    if (url.pathname === '/api/file-history') {
+      return send(res, 200, await ops.fileHistory(body.path, body.file, body.limit))
+    }
+    if (url.pathname === '/api/blame') {
+      return send(res, 200, await ops.blameFile(body.path, body.file, body.max))
+    }
+    if (url.pathname === '/api/repo-health') {
+      return send(res, 200, await ops.repoHealth(body.path))
+    }
+
     // ── 交互式 rebase ──
     if (url.pathname === '/api/rebase-preview') {
       return send(res, 200, await ops.rebasePreview(body.path, body.base))

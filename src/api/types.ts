@@ -231,6 +231,68 @@ export interface RebaseOutcome {
 
 export interface RebaseStatus {
   inProgress: boolean
+  stopped: boolean
+  subject: string
   conflicts: boolean
   conflicted: StatusFile[]
+}
+
+/* ── 工作树 ── */
+
+export interface WorktreeInfo {
+  path: string
+  head: string
+  short: string
+  branch: string
+  bare: boolean
+  detached: boolean
+  locked: boolean
+  prunable: boolean
+  isCurrent: boolean
+  exists: boolean
+  dirty: number
+  ahead: number
+  behind: number
+  lastCommit: number
+  aiHints: string[]
+}
+
+/* ── 文件历史 / Blame / 体检 ── */
+
+export interface FileHistoryEntry {
+  oid: string
+  short: string
+  subject: string
+  author: string
+  time: number
+}
+
+export interface BlameLine {
+  line: number
+  oid: string
+  short: string
+  author: string
+  time: number
+  content: string
+}
+
+export interface LargeObject {
+  oid: string
+  short: string
+  size: number
+}
+
+export interface RepoHealth {
+  gitSize: number
+  packSize: number
+  packCount: number
+  looseObjects: number
+  inPack: number
+  garbage: number
+  commits: number
+  branches: number
+  tags: number
+  files: number
+  largeObjects: LargeObject[]
+  suggestions: string[]
 }

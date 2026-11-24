@@ -62,6 +62,19 @@ const items = computed<Item[]>(() => {
       run: () => repo.openRebase(),
     },
     {
+      id: 'worktrees',
+      title: '刷新工作树列表',
+      group: '仓库',
+      run: () => repo.loadWorktrees(),
+    },
+    {
+      id: 'health',
+      title: '仓库体检',
+      hint: '体积 / 大对象 / gc 建议',
+      group: '仓库',
+      run: () => repo.openHealth(),
+    },
+    {
       id: 'all',
       title: '查看全部提交',
       group: '仓库',

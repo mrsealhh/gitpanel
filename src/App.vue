@@ -7,6 +7,9 @@ import ConflictResolver from './components/ConflictResolver.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DetailPanel from './components/DetailPanel.vue'
 import DiffView from './components/DiffView.vue'
+import BlameModal from './components/BlameModal.vue'
+import FileHistoryModal from './components/FileHistoryModal.vue'
+import HealthModal from './components/HealthModal.vue'
 import Icon from './components/Icon.vue'
 import IconButton from './components/IconButton.vue'
 import InputDialog from './components/InputDialog.vue'
@@ -18,6 +21,7 @@ import SnapshotPanel from './components/SnapshotPanel.vue'
 import StashPanel from './components/StashPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import WorkingPanel from './components/WorkingPanel.vue'
+import WorktreePanel from './components/WorktreePanel.vue'
 import type { CommitRow, RepoRef } from './api/types'
 import type { MenuItem } from './types/ui'
 import { startupRepo } from './api/env'
@@ -45,7 +49,7 @@ const pathInput = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
 const showPalette = ref(false)
 const showSettings = ref(false)
-const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots'>('branches')
+const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees'>('branches')
 const maximized = ref(false)
 
 interface MenuSpec {
@@ -88,9 +92,10 @@ const changeCount = computed(() => {
   return s.staged.length + s.unstaged.length + s.untracked.length + s.conflicted.length
 })
 
-function switchTab(t: 'branches' | 'working' | 'stashes' | 'snapshots') {
+function switchTab(t: 'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees') {
   leftTab.value = t
   if (t === 'stashes') repo.loadStashes()
+  if (t === 'worktrees') repo.loadWorktrees()
   if (t === 'snapshots') {
     repo.loadSnapshots()
     repo.loadReflog()
@@ -136,6 +141,9 @@ function onKey(e: KeyboardEvent) {
     else if (showPalette.value) showPalette.value = false
     else if (showSettings.value) showSettings.value = false
     else if (repo.rebaseOpen) repo.closeRebase()
+    else if (repo.fileHistoryFile) repo.closeFileHistory()
+    else if (repo.blameFile) repo.closeBlame()
+    else if (repo.health) repo.closeHealth()
     else if (repo.commandOutput) repo.closeCommandOutput()
     else if (repo.stashDiff) repo.closeStashDiff()
     else if (repo.diffFile) repo.closeDiff()
@@ -248,6 +256,30 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
   }
 }
 
+/* ── 文件右键菜单 ── */
+function onFileContext({ file, x, y }: { file: string; x: number; y: number }) {
+  menu.value = {
+    x,
+    y,
+    items: [
+      { id: 'diff', label: '查看并排 Diff' },
+      { id: 'history', label: '文件历史' },
+      { id: 'blame', label: 'Blame（逐行归属）' },
+      { id: 'divider', label: '', divider: true },
+      { id: 'copy', label: '复制路径' },
+    ],
+    handler: async (id) => {
+      if (id === 'diff') await repo.openFileDiff(file)
+      else if (id === 'history') await repo.openFileHistory(file)
+      else if (id === 'blame') await repo.openBlame(file)
+      else if (id === 'copy') {
+        await navigator.clipboard?.writeText(file)
+        repo.notify('ok', '已复制路径')
+      }
+    },
+  }
+}
+
 /* ── 弹窗流程 ── */
 function openNewBranch(from: string) {
   prompt.value = {
@@ -278,6 +310,26 @@ function openCreateStash() {
     placeholder: 'wip: 正在改登录',
     confirmText: '创建暂存',
     onSubmit: (message) => repo.createStash(message),
+  }
+}
+
+/** 为 AI 并行会话开一个独立工作副本 */
+function openCreateWorktree() {
+  const baseName = repo.info?.name || 'repo'
+  const parent = (repo.path || '').replace(/[\\/][^\\/]+$/, '')
+  prompt.value = {
+    title: '新建工作树',
+    label: '新分支名（会从当前 HEAD 拉出并检出到新目录）',
+    placeholder: 'feat/ai-session-1',
+    secondLabel: '目录（留空会用 ../<仓库名>-worktrees/<分支名>）',
+    secondPlaceholder: `${parent}\\${baseName}-worktrees\\feat-ai-session-1`,
+    confirmText: '创建工作树',
+    onSubmit: (branch, dir) => {
+      const target =
+        dir.trim() ||
+        `${parent}\\${baseName}-worktrees\\${branch.replace(/[\\/]/g, '-')}`
+      return repo.addWorktree({ target, branch, newBranch: true, base: 'HEAD' })
+    },
   }
 }
 
@@ -416,9 +468,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       <div class="flex h-full w-[240px] shrink-0 flex-col" :style="{ borderRight: '1px solid var(--border)' }">
         <div class="flex shrink-0 items-center" :style="{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }">
           <button
-            v-for="t in (['branches', 'working', 'stashes', 'snapshots'] as const)"
+            v-for="t in (['branches', 'working', 'stashes', 'snapshots', 'worktrees'] as const)"
             :key="t"
-            class="flex-1 px-1 py-1.5 text-[11px]"
+            class="flex-1 px-0.5 py-1.5 text-[11px]"
             :style="
               leftTab === t
                 ? { color: 'var(--text)', boxShadow: 'inset 0 -2px 0 var(--accent)' }
@@ -426,9 +478,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
             "
             @click="switchTab(t)"
           >
-            {{ t === 'branches' ? '分支' : t === 'working' ? '工作区' : t === 'stashes' ? '暂存' : '安全网' }}
+            {{ t === 'branches' ? '分支' : t === 'working' ? '工作区' : t === 'stashes' ? '暂存' : t === 'snapshots' ? '安全网' : '工作树' }}
             <span v-if="t === 'working' && changeCount" class="ml-0.5" :style="{ color: 'var(--accent)' }">{{ changeCount }}</span>
             <span v-else-if="t === 'stashes' && repo.stashes.length" class="ml-0.5 t3">{{ repo.stashes.length }}</span>
+            <span v-else-if="t === 'worktrees' && repo.worktrees.length" class="ml-0.5 t3">{{ repo.worktrees.length }}</span>
           </button>
         </div>
 
@@ -449,6 +502,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           @conflict="repo.openConflict($event)"
         />
         <StashPanel v-else-if="leftTab === 'stashes'" class="min-h-0 flex-1" @create="openCreateStash" />
+        <WorktreePanel
+          v-else-if="leftTab === 'worktrees'"
+          class="min-h-0 flex-1"
+          @create="openCreateWorktree"
+          @open="openPath"
+        />
         <SnapshotPanel v-else class="min-h-0 flex-1" />
       </div>
 
@@ -465,6 +524,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         :detail="repo.detail"
         :loading="repo.detailLoading"
         @open-file="repo.openFileDiff($event)"
+        @file-context="onFileContext"
       />
     </main>
 
@@ -540,6 +600,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     />
     <PatchModal />
     <RebaseDialog v-if="repo.rebaseOpen" />
+    <FileHistoryModal />
+    <BlameModal />
+    <HealthModal />
     <CommandPalette v-if="showPalette" @close="showPalette = false" @settings="showSettings = true" />
     <SettingsDialog v-if="showSettings" @close="showSettings = false" />
     <ContextMenu

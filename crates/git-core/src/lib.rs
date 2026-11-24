@@ -8,5 +8,5 @@ pub use model::*;
 pub use repo::Repo;
 pub use worktree::{
     ConflictBlock, ConflictDetail, RebaseCommit, RebaseOutcome, RebaseStatus, RebaseStep,
-    ReflogEntry, Snapshot, Stash, StashDiff, StatusFile, TagInfo, WorktreeStatus,
+    ReflogEntry, Snapshot, Stash, StashDiff, StatusFile, TagInfo, WorktreeInfo, WorktreeStatus,
 };

@@ -1,8 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
+  BlameLine,
   CommandResult,
   CommitDetail,
   FileDiff,
+  FileHistoryEntry,
   GraphPage,
   MergeResult,
   PluginCommand,
@@ -12,11 +14,13 @@ import type {
   RebaseStep,
   ReflogEntry,
   RemoteInfo,
+  RepoHealth,
   RepoInfo,
   SyncResult,
   Stash,
   StashDiff,
   TagInfo,
+  WorktreeInfo,
   WorktreeStatus,
   Snapshot,
   ConflictDetail,
@@ -220,5 +224,33 @@ export const api = {
   },
   rebaseAction(path: string, action: 'continue' | 'abort' | 'skip'): Promise<RebaseOutcome> {
     return post<RebaseOutcome>('/api/rebase-action', { path, action })
+  },
+
+  /* ── 工作树 ── */
+  worktrees(path: string): Promise<{ worktrees: WorktreeInfo[] }> {
+    return post<{ worktrees: WorktreeInfo[] }>('/api/worktrees', { path })
+  },
+  addWorktree(
+    path: string,
+    opts: { target: string; branch: string; newBranch: boolean; base?: string },
+  ): Promise<{ ok: boolean; path: string }> {
+    return post<{ ok: boolean; path: string }>('/api/worktree-add', { path, ...opts })
+  },
+  removeWorktree(path: string, target: string, force = false): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/worktree-remove', { path, target, force })
+  },
+  pruneWorktrees(path: string): Promise<{ ok: boolean; output: string }> {
+    return post<{ ok: boolean; output: string }>('/api/worktree-prune', { path })
+  },
+
+  /* ── 文件历史 / Blame / 体检 ── */
+  fileHistory(path: string, file: string, limit = 200): Promise<{ file: string; commits: FileHistoryEntry[] }> {
+    return post<{ file: string; commits: FileHistoryEntry[] }>('/api/file-history', { path, file, limit })
+  },
+  blame(path: string, file: string, max = 2000): Promise<{ file: string; lines: BlameLine[]; truncated?: boolean }> {
+    return post<{ file: string; lines: BlameLine[]; truncated?: boolean }>('/api/blame', { path, file, max })
+  },
+  repoHealth(path: string): Promise<RepoHealth> {
+    return post<RepoHealth>('/api/repo-health', { path })
   },
 }

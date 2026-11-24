@@ -151,6 +151,32 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
         "rebase-status" => serde_json::to_value(repo.rebase_status()?)?,
         "rebase-action" => serde_json::to_value(repo.rebase_action(&s(&p, "action"))?)?,
 
+        "worktrees" => json!({ "worktrees": repo.worktrees()? }),
+        "worktree-add" => {
+            let path = repo.add_worktree(
+                &s(&p, "target"),
+                &s(&p, "branch"),
+                b(&p, "newBranch"),
+                &s(&p, "base"),
+            )?;
+            json!({ "ok": true, "path": path })
+        }
+        "worktree-remove" => {
+            repo.remove_worktree(&s(&p, "target"), b(&p, "force"))?;
+            json!({ "ok": true })
+        }
+        "worktree-prune" => json!({ "ok": true, "output": repo.prune_worktrees()? }),
+
+        "file-history" => json!({
+            "file": s(&p, "file"),
+            "commits": repo.file_history(&s(&p, "file"), n(&p, "limit", 200) as usize)?
+        }),
+        "blame" => {
+            let lines = repo.blame(&s(&p, "file"), n(&p, "max", 2000) as usize)?;
+            json!({ "file": s(&p, "file"), "lines": lines, "truncated": false })
+        }
+        "repo-health" => serde_json::to_value(repo.repo_health()?)?,
+
         other => return Err(anyhow!("未知命令: {other}")),
     };
 

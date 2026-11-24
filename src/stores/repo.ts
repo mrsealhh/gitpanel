@@ -3,11 +3,13 @@ import { api } from '../api/git'
 import { recentList, recentPin, recentRemove, recentTouch } from '../api/desktop'
 import type { RecentRepo } from '../api/desktop'
 import type {
+  BlameLine,
   CommandResult,
   CommitDetail,
   CommitRow,
   ConflictDetail,
   FileDiff,
+  FileHistoryEntry,
   MergeResult,
   PluginCommand,
   RebaseCommit,
@@ -16,12 +18,14 @@ import type {
   RebaseStep,
   ReflogEntry,
   RemoteInfo,
+  RepoHealth,
   RepoInfo,
   Snapshot,
   Stash,
   StashDiff,
   StatusFile,
   TagInfo,
+  WorktreeInfo,
   WorktreeStatus,
 } from '../api/types'
 
@@ -91,6 +95,18 @@ export const useRepoStore = defineStore('repo', {
     rebaseCommits: [] as RebaseCommit[],
     rebaseLoading: false,
     rebaseStatus: null as RebaseStatus | null,
+
+    // 工作树
+    worktrees: [] as WorktreeInfo[],
+    worktreesLoading: false,
+
+    // 文件历史 / Blame / 体检
+    fileHistoryFile: '',
+    fileHistory: [] as FileHistoryEntry[],
+    blameFile: '',
+    blameLines: [] as BlameLine[],
+    health: null as RepoHealth | null,
+    healthLoading: false,
   }),
 
   getters: {
@@ -250,6 +266,21 @@ export const useRepoStore = defineStore('repo', {
       this.diff = null
     },
 
+    /** 打开任意提交中某文件的 diff（用于文件历史跳转） */
+    async openFileDiffAt(oid: string, file: string) {
+      if (!this.path) return
+      this.diffFile = file
+      this.diff = null
+      this.diffLoading = true
+      try {
+        this.diff = await api.fileDiff(this.path, oid, file)
+      } catch {
+        this.diff = null
+      } finally {
+        this.diffLoading = false
+      }
+    },
+
     notify(kind: Notice['kind'], text: string) {
       this.notice = { kind, text }
       if (noticeTimer) window.clearTimeout(noticeTimer)
@@ -362,8 +393,7 @@ export const useRepoStore = defineStore('repo', {
       }
     },
 
-    async openWorktreeDiff(file: string, staged: boolean) {
-      if (!this.path) return
+    async openWorktreeDiff(file: string, staged: boolean) {      if (!this.path) return
       this.diffFile = file
       this.diffStaged = staged
       this.diff = null
@@ -722,6 +752,105 @@ export const useRepoStore = defineStore('repo', {
       } catch (e) {
         this.notify('err', String((e as Error).message || e))
       }
+    },
+
+    /* ─────────────── 工作树 ─────────────── */
+
+    async loadWorktrees() {
+      if (!this.path) return
+      this.worktreesLoading = true
+      try {
+        this.worktrees = (await api.worktrees(this.path)).worktrees
+      } catch (e) {
+        this.worktrees = []
+        this.notify('err', String((e as Error).message || e))
+      } finally {
+        this.worktreesLoading = false
+      }
+    },
+
+    async addWorktree(opts: { target: string; branch: string; newBranch: boolean; base?: string }) {
+      if (!this.path) return
+      try {
+        const res = await api.addWorktree(this.path, opts)
+        this.notify('ok', `已创建工作树：${res.path}`)
+        await this.loadWorktrees()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async removeWorktree(target: string, force = false) {
+      if (!this.path) return
+      try {
+        await api.removeWorktree(this.path, target, force)
+        this.notify('ok', '工作树已移除')
+        await this.loadWorktrees()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async pruneWorktrees() {
+      if (!this.path) return
+      try {
+        const res = await api.pruneWorktrees(this.path)
+        this.notify('ok', res.output ? `已清理：${res.output.slice(0, 60)}` : '没有可清理的工作树')
+        await this.loadWorktrees()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    /* ─────────────── 文件历史 / Blame / 体检 ─────────────── */
+
+    async openFileHistory(file: string) {
+      if (!this.path) return
+      this.fileHistoryFile = file
+      this.fileHistory = []
+      try {
+        this.fileHistory = (await api.fileHistory(this.path, file, 200)).commits
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    closeFileHistory() {
+      this.fileHistoryFile = ''
+      this.fileHistory = []
+    },
+
+    async openBlame(file: string) {
+      if (!this.path) return
+      this.blameFile = file
+      this.blameLines = []
+      try {
+        this.blameLines = (await api.blame(this.path, file, 3000)).lines
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    closeBlame() {
+      this.blameFile = ''
+      this.blameLines = []
+    },
+
+    async openHealth() {
+      if (!this.path) return
+      this.health = null
+      this.healthLoading = true
+      try {
+        this.health = await api.repoHealth(this.path)
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      } finally {
+        this.healthLoading = false
+      }
+    },
+
+    closeHealth() {
+      this.health = null
     },
   },
 })
