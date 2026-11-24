@@ -223,7 +223,7 @@ struct FsEntry {
 
 /// 仓库内所有可编辑文件（已跟踪 + 未跟踪），用于文件面板的全局搜索
 fn repo_files(root: &std::path::Path) -> Result<Value> {
-    let out = std::process::Command::new("git")
+    let out = git_core::proc::command("git")
         .arg("-C")
         .arg(root)
         .args(["ls-files", "-co", "--exclude-standard", "-z"])
@@ -501,7 +501,7 @@ fn clone_repo(url: String, target: String) -> Result<String, String> {
         return Err("目标目录已存在且非空".into());
     }
 
-    let out = std::process::Command::new("git")
+    let out = git_core::proc::command("git")
         .args(["clone", "--progress", u])
         .arg(&t)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -534,7 +534,7 @@ fn clone_repo(url: String, target: String) -> Result<String, String> {
 #[tauri::command]
 fn git_identity() -> Value {
     let get = |key: &str| {
-        std::process::Command::new("git")
+        git_core::proc::command("git")
             .args(["config", "--global", "--get", key])
             .output()
             .ok()
@@ -758,14 +758,14 @@ fn open_external(url: String) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        std::process::Command::new("cmd")
+        git_core::proc::command("cmd")
             .args(["/C", "start", "", &url])
             .spawn()
             .map_err(|e| e.to_string())?;
     }
     #[cfg(not(windows))]
     {
-        std::process::Command::new("xdg-open").arg(&url).spawn().map_err(|e| e.to_string())?;
+        git_core::proc::command("xdg-open").arg(&url).spawn().map_err(|e| e.to_string())?;
     }
     Ok(())
 }

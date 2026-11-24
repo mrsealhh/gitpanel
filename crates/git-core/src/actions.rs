@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
@@ -19,7 +18,7 @@ pub fn valid_ref(s: &str) -> bool {
 }
 
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
+    let out = crate::proc::command("git")
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -108,16 +107,16 @@ impl Repo {
                 .collect::<Vec<_>>()
                 .join(" ");
             if cfg!(windows) {
-                let mut c = Command::new("cmd");
+                let mut c = crate::proc::command("cmd");
                 c.arg("/C").arg(line);
                 c
             } else {
-                let mut c = Command::new("sh");
+                let mut c = crate::proc::command("sh");
                 c.arg("-c").arg(line);
                 c
             }
         } else {
-            let mut c = Command::new(&cmd.command);
+            let mut c = crate::proc::command(&cmd.command);
             c.args(&cmd.args);
             c
         };

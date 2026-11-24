@@ -27,7 +27,7 @@ const collapsed = {
 }
 type BucketKey = keyof typeof collapsed
 
-const open = ref({ remote: true, tag: true })
+const open = ref({ local: true, remote: true, tag: true })
 
 const localRefs = computed(() => props.refs.filter((r) => r.kind === 'branch' || r.kind === 'head'))
 const remoteRefs = computed(() => props.refs.filter((r) => r.kind === 'remote'))
@@ -152,11 +152,16 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
       </button>
 
       <!-- 本地分支树 -->
-      <div class="flex items-center px-3 py-1 text-[11px] font-medium uppercase tracking-wide t3">
+      <button
+        class="flex w-full items-center gap-1 px-3 py-1 text-[11px] font-medium uppercase tracking-wide t3"
+        @click="open.local = !open.local"
+      >
+        <span class="text-[9px]">{{ open.local ? '▾' : '▸' }}</span>
         本地分支
         <span class="ml-1 opacity-60">{{ localCount }}</span>
-      </div>
-      <div v-for="row in localRows" :key="`l:${row.node.path}`">
+      </button>
+      <div v-show="open.local">
+        <div v-for="row in localRows" :key="`l:${row.node.path}`">
         <div
           class="flex w-full cursor-pointer items-center gap-1 truncate py-[3px] text-[12px] row-hover"
           :style="rowStyle(row.depth, tip === row.node.ref?.name, !!row.node.ref)"
@@ -188,19 +193,7 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
           </span>
         </div>
 
-        <!-- 该分支的远端跟踪分支 -->
-        <button
-          v-for="up in row.node.upstreams"
-          :key="up.name"
-          class="flex w-full items-center gap-1 truncate py-[2px] text-left text-[11px] row-hover"
-          :style="{ paddingLeft: `${18 + row.depth * 12}px`, paddingRight: '8px', color: 'var(--text-mute)' }"
-          :title="`远端跟踪：${up.name}`"
-          @click="emit('filter', up.name)"
-          @contextmenu="onCtx($event, up)"
-        >
-          <span class="shrink-0 text-[9px] opacity-70">↳</span>
-          <span class="truncate">{{ up.name }}</span>
-        </button>
+      </div>
       </div>
 
       <!-- 远端分支树（按远端分组：origin > feature > x） -->

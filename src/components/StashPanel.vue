@@ -12,15 +12,21 @@ onMounted(() => repo.loadStashes())
 <template>
   <div class="flex h-full flex-col" :style="{ background: 'var(--panel)' }">
     <div class="line-b flex items-center px-3 py-2">
-      <span class="text-[12px] font-semibold t1">暂存</span>
+      <span class="text-[12px] font-semibold t1">储藏</span>
       <span class="ml-2 text-[11px] t3">{{ repo.stashes.length }}</span>
-      <button class="btn ml-auto px-2 py-0.5 text-[11px]" @click="emit('create')">新建</button>
+      <button class="btn ml-auto px-2 py-0.5 text-[11px]" title="把当前工作区改动收进 stash" @click="emit('create')">新建</button>
       <button class="btn ml-1 px-2 py-0.5 text-[11px]" @click="repo.loadStashes()">刷新</button>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto">
       <div v-if="repo.stashesLoading" class="p-3 text-[12px] t3">读取中…</div>
-      <div v-else-if="!repo.stashes.length" class="p-3 text-[12px] t3">还没有暂存</div>
+      <div v-else-if="!repo.stashes.length" class="p-3 text-[12px] leading-relaxed t3">
+        还没有储藏记录。
+        <div class="mt-1 text-[11px]">
+          这里是 git stash：点「新建」把当前改动临时收起来（工作区变干净），之后可以应用 / 弹出 / 删除。
+          已暂存（staged）的改动在「工作区」里，不在这里。
+        </div>
+      </div>
       <div
         v-for="s in repo.stashes"
         :key="s.ref"

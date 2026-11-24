@@ -56,7 +56,9 @@ const pathInput = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
 const showPalette = ref(false)
 const showSettings = ref(false)
-const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees' | 'files'>('branches')
+const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees'>('branches')
+/** 右侧面板：变动详情 / 项目文件 */
+const rightTab = ref<'detail' | 'files'>('detail')
 const maximized = ref(false)
 const diffFullscreen = ref(false)
 const showWorktreeDialog = ref(false)
@@ -65,31 +67,57 @@ const showClone = ref(false)
 const cloneUrl = ref('')
 const showDate = ref(false)
 const dateBtn = ref<HTMLElement | null>(null)
+const dateRoot = ref<HTMLElement | null>(null)
 const datePos = ref({ right: 8, top: 0 })
+/** 日期弹窗里的草稿：点「应用」才真正生效，点「关闭」放弃 */
+const dateDraft = ref({ from: '', to: '' })
 
 function ymd(d: Date) {
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+/** 预设只改草稿，点「应用」才生效 */
 function setDateRange(preset: 'today' | 'yesterday' | '3d' | '7d' | 'clear') {
   const now = new Date()
   if (preset === 'clear') {
-    repo.dateFrom = ''
-    repo.dateTo = ''
+    dateDraft.value = { from: '', to: '' }
     return
   }
   const from = new Date(now)
   if (preset === 'yesterday') {
     from.setDate(now.getDate() - 1)
-    repo.dateFrom = ymd(from)
-    repo.dateTo = ymd(from)
+    dateDraft.value = { from: ymd(from), to: ymd(from) }
     return
   }
   if (preset === '3d') from.setDate(now.getDate() - 2)
   if (preset === '7d') from.setDate(now.getDate() - 6)
-  repo.dateFrom = ymd(from)
-  repo.dateTo = ymd(now)
+  dateDraft.value = { from: ymd(from), to: ymd(now) }
+}
+
+const dateLabel = computed(() => {
+  if (!repo.dateFrom && !repo.dateTo) return '按提交日期筛选'
+  const from = repo.dateFrom || '…'
+  const to = repo.dateTo || '…'
+  return `日期范围：${from} ~ ${to}（点击修改）`
+})
+
+function applyDate() {
+  repo.dateFrom = dateDraft.value.from
+  repo.dateTo = dateDraft.value.to
+  showDate.value = false
+  if (repo.dateFrom || repo.dateTo) {
+    repo.notify('ok', `已筛选 ${repo.dateFrom || '…'} ~ ${repo.dateTo || '…'}`)
+  } else {
+    repo.notify('info', '已清除日期筛选')
+  }
+}
+
+function clearDate() {
+  dateDraft.value = { from: '', to: '' }
+  repo.dateFrom = ''
+  repo.dateTo = ''
+  showDate.value = false
 }
 
 /** 原生文件夹选择；浏览器态提示手输 */
@@ -112,10 +140,16 @@ function onCloneFromUrl(url: string) {
 /** 日期筛选浮层：用 fixed 定位，避免被标题栏裁剪 */
 function toggleDate() {
   if (!showDate.value) {
+    dateDraft.value = { from: repo.dateFrom, to: repo.dateTo }
     const r = dateBtn.value?.getBoundingClientRect()
     if (r) datePos.value = { right: Math.max(8, window.innerWidth - r.right), top: r.bottom + 6 }
   }
   showDate.value = !showDate.value
+}
+
+function onDocMouseDown(e: MouseEvent) {
+  if (!showDate.value) return
+  if (dateRoot.value && !dateRoot.value.contains(e.target as Node)) showDate.value = false
 }
 
 function onRenameProject(path: string) {
@@ -201,7 +235,7 @@ const changeCount = computed(() => {
   return s.staged.length + s.unstaged.length + s.untracked.length + s.conflicted.length
 })
 
-function switchTab(t: 'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees' | 'files') {
+function switchTab(t: 'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees') {
   leftTab.value = t
   if (t === 'stashes') repo.loadStashes()
   if (t === 'worktrees') repo.loadWorktrees()
@@ -255,6 +289,7 @@ function onKey(e: KeyboardEvent) {
     else if (repo.health) repo.closeHealth()
     else if (showDashboard.value) showDashboard.value = false
     else if (showClone.value) showClone.value = false
+    else if (showDate.value) showDate.value = false
     else if (showWorktreeDialog.value) showWorktreeDialog.value = false
     else if (repo.commandOutput) repo.closeCommandOutput()
     else if (repo.stashDiff) repo.closeStashDiff()
@@ -425,10 +460,10 @@ function openCreateTag(oid?: string) {
 
 function openCreateStash() {
   prompt.value = {
-    title: '新建暂存',
+    title: '新建储藏（stash）',
     label: '描述',
     placeholder: 'wip: 正在改登录',
-    confirmText: '创建暂存',
+    confirmText: '创建储藏',
     onSubmit: (message) => repo.createStash(message),
   }
 }
@@ -495,6 +530,7 @@ const noticeClass = computed(() => {
 onMounted(async () => {
   settings.init()
   window.addEventListener('keydown', onKey)
+  document.addEventListener('mousedown', onDocMouseDown)
   void repo.loadRecents()
   maximized.value = await isMaximized()
 
@@ -528,7 +564,10 @@ onMounted(async () => {
   }
 })
 
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey)
+  document.removeEventListener('mousedown', onDocMouseDown)
+})
 </script>
 
 <template>
@@ -551,14 +590,60 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         @browse="browseFolder"
       />
 
-      <div class="relative hidden shrink-0 lg:block">
-        <input
-          ref="searchInput"
-          v-model="repo.search"
-          class="field w-[160px] py-1 pl-7 pr-2 text-[12px]"
-          placeholder="搜索提交 / 作者"
-        />
-        <span class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] t3">⌕</span>
+      <!-- 搜索 + 日期筛选放在一起 -->
+      <div ref="dateRoot" class="relative flex min-w-0 max-w-[340px] flex-1 items-center gap-1">
+        <div class="relative min-w-0 flex-1">
+          <input
+            ref="searchInput"
+            v-model="repo.search"
+            class="field w-full py-1 pl-7 pr-2 text-[12px]"
+            placeholder="搜索提交 / 作者"
+          />
+          <span class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] t3">⌕</span>
+        </div>
+        <span ref="dateBtn" class="shrink-0">
+          <IconButton
+            name="calendar"
+            :title="dateLabel"
+            :active="!!repo.dateFrom || !!repo.dateTo"
+            @click="toggleDate"
+          />
+        </span>
+
+        <div
+          v-if="showDate"
+          class="modal animate-pop fixed z-[60] w-[272px] p-3"
+          :style="{ right: datePos.right + 'px', top: datePos.top + 'px' }"
+        >
+          <div class="mb-2 flex items-center">
+            <span class="text-[11px] font-medium t2">提交日期范围</span>
+            <button
+              class="ml-auto rounded px-1 text-[12px] t3 hover:opacity-80"
+              title="关闭（不应用）"
+              @click="showDate = false"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div class="mb-2 flex gap-1">
+            <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('today')">今日</button>
+            <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('yesterday')">昨日</button>
+            <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('3d')">近三天</button>
+            <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('7d')">近一周</button>
+          </div>
+          <label class="mb-1 block text-[10px] t3">起始</label>
+          <input v-model="dateDraft.from" type="date" class="field mb-2 w-full px-2 py-1 text-[11px]" />
+          <label class="mb-1 block text-[10px] t3">结束</label>
+          <input v-model="dateDraft.to" type="date" class="field w-full px-2 py-1 text-[11px]" />
+
+          <div class="mt-2 flex items-center gap-1">
+            <button class="btn px-2 py-0.5 text-[10px]" @click="clearDate">清除</button>
+            <span class="ml-auto" />
+            <button class="btn px-2 py-0.5 text-[10px]" @click="showDate = false">关闭</button>
+            <button class="btn btn-primary px-2 py-0.5 text-[10px]" @click="applyDate">应用</button>
+          </div>
+        </div>
       </div>
 
       <span v-if="repo.error" class="min-w-0 max-w-[180px] shrink truncate text-[11px] text-rose-400" :title="repo.error">
@@ -589,36 +674,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         <div class="relative">
           <IconButton name="push" :title="`Push：推送到远端${repo.status?.ahead ? `（领先 ${repo.status.ahead}）` : ''}`" :disabled="!!repo.syncing" @click="repo.sync('push')" />
           <span v-if="repo.status?.ahead" class="count-badge">{{ repo.status.ahead }}</span>
-        </div>
-
-        <div class="relative">
-          <span ref="dateBtn" class="inline-flex">
-            <IconButton
-              name="calendar"
-              title="按提交日期筛选"
-              :active="!!repo.dateFrom || !!repo.dateTo"
-              @click="toggleDate"
-            />
-          </span>
-          <div
-            v-if="showDate"
-            class="modal animate-pop fixed z-[60] w-[250px] p-3"
-            :style="{ right: datePos.right + 'px', top: datePos.top + 'px' }"
-          >
-            <div class="mb-2 flex gap-1">
-              <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('today')">今日</button>
-              <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('yesterday')">昨日</button>
-              <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('3d')">近三天</button>
-              <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('7d')">近一周</button>
-            </div>
-            <label class="mb-1 block text-[10px] t3">起始</label>
-            <input v-model="repo.dateFrom" type="date" class="field mb-2 w-full px-2 py-1 text-[11px]" />
-            <label class="mb-1 block text-[10px] t3">结束</label>
-            <input v-model="repo.dateTo" type="date" class="field w-full px-2 py-1 text-[11px]" />
-            <div class="mt-2 flex justify-end">
-              <button class="btn px-2 py-0.5 text-[10px]" @click="setDateRange('clear'); showDate = false">清除</button>
-            </div>
-          </div>
         </div>
 
         <span class="mx-1 h-4 w-px" :style="{ background: 'var(--border)' }" />
@@ -657,10 +712,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       >
         <div class="flex h-8 shrink-0 items-center gap-px px-0.5" :style="{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }">
           <button
-            v-for="t in (['branches', 'working', 'files', 'stashes', 'snapshots', 'worktrees'] as const)"
+            v-for="t in (['branches', 'working', 'stashes', 'snapshots', 'worktrees'] as const)"
             :key="t"
             class="relative flex h-8 flex-1 items-center justify-center whitespace-nowrap px-0.5 text-[10px] leading-none"
-            :title="t === 'branches' ? '分支' : t === 'working' ? `工作区${changeCount ? `（${changeCount} 项改动）` : ''}` : t === 'files' ? '项目文件（可直接编辑）' : t === 'stashes' ? '暂存区' : t === 'snapshots' ? '安全网快照' : '工作树'"
+            :title="t === 'branches' ? '分支' : t === 'working' ? `工作区${changeCount ? `（${changeCount} 项改动）` : ''}` : t === 'stashes' ? '储藏：git stash，把当前改动临时存起来' : t === 'snapshots' ? '安全网快照' : '工作树'"
             :style="
               leftTab === t
                 ? { color: 'var(--text)', boxShadow: 'inset 0 -2px 0 var(--accent)' }
@@ -668,7 +723,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
             "
             @click="switchTab(t)"
           >
-            {{ t === 'branches' ? '分支' : t === 'working' ? '工作区' : t === 'files' ? '文件' : t === 'stashes' ? '暂存' : t === 'snapshots' ? '安全网' : '工作树' }}
+            {{ t === 'branches' ? '分支' : t === 'working' ? '工作区' : t === 'stashes' ? '储藏' : t === 'snapshots' ? '安全网' : '工作树' }}
             <span
               v-if="(t === 'working' && changeCount) || (t === 'stashes' && repo.stashes.length) || (t === 'worktrees' && repo.worktrees.length)"
               class="absolute right-0.5 top-1 h-1 w-1 rounded-full"
@@ -693,7 +748,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           class="min-h-0 flex-1"
           @conflict="repo.openConflict($event)"
         />
-        <FilePanel v-else-if="leftTab === 'files'" class="min-h-0 flex-1" />
         <StashPanel v-else-if="leftTab === 'stashes'" class="min-h-0 flex-1" @create="openCreateStash" />
         <WorktreePanel
           v-else-if="leftTab === 'worktrees'"
@@ -757,14 +811,41 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       </div>
 
       <div v-if="settings.showRight" class="panel-resizer" @pointerdown="startDrag('right', $event)" />
-      <DetailPanel
+      <div
         v-if="settings.showRight"
-        :style="{ width: settings.rightWidth + 'px' }"
-        :detail="repo.detail"
-        :loading="repo.detailLoading"
-        @open-file="repo.openFileDiff($event)"
-        @file-context="onFileContext"
-      />
+        class="flex h-full shrink-0 flex-col"
+        :style="{ width: settings.rightWidth + 'px', borderLeft: '1px solid var(--border)' }"
+      >
+        <div
+          class="flex h-8 shrink-0 items-center"
+          :style="{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }"
+        >
+          <button
+            v-for="t in (['detail', 'files'] as const)"
+            :key="t"
+            class="relative flex h-8 flex-1 items-center justify-center whitespace-nowrap text-[10px] leading-none"
+            :title="t === 'detail' ? '当前提交的变动详情' : '项目文件（可直接查看 / 编辑）'"
+            :style="
+              rightTab === t
+                ? { color: 'var(--text)', boxShadow: 'inset 0 -2px 0 var(--accent)' }
+                : { color: 'var(--text-mute)' }
+            "
+            @click="rightTab = t"
+          >
+            {{ t === 'detail' ? '变动详情' : '文件' }}
+          </button>
+        </div>
+
+        <DetailPanel
+          v-if="rightTab === 'detail'"
+          class="min-h-0 flex-1"
+          :detail="repo.detail"
+          :loading="repo.detailLoading"
+          @open-file="repo.openFileDiff($event)"
+          @file-context="onFileContext"
+        />
+        <FilePanel v-else class="min-h-0 flex-1" />
+      </div>
     </main>
 
     <main v-else class="flex min-h-0 flex-1">

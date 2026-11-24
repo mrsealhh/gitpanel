@@ -3,7 +3,6 @@
 // 读路径结构化解剖 git 输出，写路径走 git CLI（避免 libgit2 在 rebase/merge 上的行为差异）。
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -162,7 +161,7 @@ pub struct RebaseStatus {
 }
 
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
+    let out = crate::proc::command("git")
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -176,7 +175,7 @@ fn git(repo: &Path, args: &[&str]) -> Result<String> {
 }
 
 fn git_allow_fail(repo: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git").arg("-C").arg(repo).args(args).output().ok()?;
+    let out = crate::proc::command("git").arg("-C").arg(repo).args(args).output().ok()?;
     if out.status.success() {
         Some(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
@@ -764,7 +763,7 @@ impl Repo {
     /* ── 工作区 Diff / 同步 / 分支 ── */
 
     fn stage_blob_bytes(&self, spec: &str) -> Option<Vec<u8>> {
-        let out = Command::new("git")
+        let out = crate::proc::command("git")
             .arg("-C")
             .arg(self.path())
             .args(["show", spec])
@@ -982,7 +981,7 @@ impl Repo {
             p
         };
 
-        let output = Command::new("git")
+        let output = crate::proc::command("git")
             .arg("-C")
             .arg(self.path())
             .args(["rebase", "-i", &base_oid])
@@ -1055,7 +1054,7 @@ impl Repo {
         if !matches!(action, "continue" | "abort" | "skip") {
             bail!("未知的 rebase 操作");
         }
-        let out = Command::new("git")
+        let out = crate::proc::command("git")
             .arg("-C")
             .arg(self.path())
             .args(["rebase", &format!("--{action}")])
@@ -1560,7 +1559,7 @@ u UU N... 100644 100644 100644 100644 aaa bbb ccc app.txt\0";
         std::fs::create_dir_all(&dir).unwrap();
 
         let run = |args: &[&str]| {
-            let out = Command::new("git")
+            let out = crate::proc::command("git")
                 .arg("-C")
                 .arg(&dir)
                 .args(args)

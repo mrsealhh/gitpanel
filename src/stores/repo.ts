@@ -87,6 +87,8 @@ export const useRepoStore = defineStore('repo', {
     editorFile: '',
     editor: null as FileText | null,
     editorContent: '',
+    /** 原文件的换行风格，保存时还原（CodeMirror 会把 CRLF 归一成 LF） */
+    editorEol: '\n' as string,
     editorLoading: false,
     editorSaving: false,
     commands: [] as PluginCommand[],
@@ -388,7 +390,10 @@ export const useRepoStore = defineStore('repo', {
       this.editorContent = ''
       this.editorLoading = true
       try {
-        this.editor = await api.fsRead(this.path, file)
+        const res = await api.fsRead(this.path, file)
+        // CodeMirror 内部统一用 LF，这里记下原文件风格，保存时还原
+        this.editorEol = res.content.includes('\r\n') ? '\r\n' : '\n'
+        this.editor = { ...res, content: res.content.replace(/\r\n/g, '\n') }
         this.editorContent = this.editor.content
       } catch (e) {
         this.editor = null
@@ -408,7 +413,9 @@ export const useRepoStore = defineStore('repo', {
       }
       this.editorSaving = true
       try {
-        const r = await api.fsWrite(this.path, this.editorFile, this.editorContent)
+        // 编辑器里是 LF，写回时还原成原文件的换行风格
+        const payload = this.editorContent.replace(/\r\n/g, '\n').split('\n').join(this.editorEol)
+        const r = await api.fsWrite(this.path, this.editorFile, payload)
         this.editor = {
           ...this.editor,
           content: this.editorContent,
@@ -704,7 +711,7 @@ export const useRepoStore = defineStore('repo', {
       if (!this.path) return
       try {
         await api.createStash(this.path, message, includeUntracked)
-        this.notify('ok', '已创建暂存')
+        this.notify('ok', '已创建储藏（stash）')
         await this.loadStashes()
         await this.refreshStatus()
         await this.reload()
