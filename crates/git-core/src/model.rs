@@ -88,6 +88,17 @@ pub struct CommitDetail {
     pub deletions: u32,
 }
 
+/// 单个文件的「父版本 / 当前版本」全文，用于并排合并视图
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDiff {
+    pub path: String,
+    pub old_text: String,
+    pub new_text: String,
+    pub is_binary: bool,
+    pub truncated: bool,
+}
+
 /// 布局输入：只保留算法需要的字段
 #[derive(Debug, Clone)]
 pub struct RawCommit {

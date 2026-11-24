@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from '../api/git'
-import type { CommitDetail, CommitRow, RepoInfo } from '../api/types'
+import type { CommitDetail, CommitRow, FileDiff, RepoInfo } from '../api/types'
 
 const RECENT_KEY = 'gitpanel.recent'
 const PAGE_SIZE = 400
@@ -28,6 +28,9 @@ export const useRepoStore = defineStore('repo', {
     selected: null as CommitRow | null,
     detail: null as CommitDetail | null,
     detailLoading: false,
+    diffFile: '',
+    diff: null as FileDiff | null,
+    diffLoading: false,
     recent: loadRecent(),
   }),
 
@@ -120,6 +123,25 @@ export const useRepoStore = defineStore('repo', {
     async setTip(tip: string) {
       this.tip = tip
       await this.reload()
+    },
+
+    async openFileDiff(file: string) {
+      this.diffFile = file
+      this.diff = null
+      if (!this.path || !this.selected) return
+      this.diffLoading = true
+      try {
+        this.diff = await api.fileDiff(this.path, this.selected.oid, file)
+      } catch {
+        this.diff = null
+      } finally {
+        this.diffLoading = false
+      }
+    },
+
+    closeDiff() {
+      this.diffFile = ''
+      this.diff = null
     },
   },
 })

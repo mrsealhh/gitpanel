@@ -68,6 +68,19 @@ fn main() -> anyhow::Result<()> {
             d.additions,
             d.deletions
         );
+
+        if let Some(f) = d.files.first() {
+            let t4 = Instant::now();
+            let fd = repo.file_diff(&first.oid, &f.path)?;
+            println!(
+                "file diff       : {:>9.2} ms  {} ({} -> {} bytes, binary={})",
+                t4.elapsed().as_secs_f64() * 1000.0,
+                fd.path,
+                fd.old_text.len(),
+                fd.new_text.len(),
+                fd.is_binary
+            );
+        }
     }
 
     Ok(())

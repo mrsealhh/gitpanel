@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import CommitList from './components/CommitList.vue'
 import DetailPanel from './components/DetailPanel.vue'
+import DiffView from './components/DiffView.vue'
 import SidePanel from './components/SidePanel.vue'
 import { useRepoStore } from './stores/repo'
 
@@ -11,6 +12,25 @@ const pathInput = ref('F:\\gitlab\\gitpanel')
 async function open() {
   await store.open(pathInput.value)
 }
+
+function onKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && store.diffFile) store.closeDiff()
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  // 深链接：?repo=<路径>[&file=<文件>] 直接打开，便于调试与后续 Tauri 唤醒
+  const params = new URLSearchParams(location.search)
+  const repoParam = params.get('repo')
+  const fileParam = params.get('file')
+  if (repoParam) {
+    pathInput.value = repoParam
+    open().then(() => {
+      if (fileParam) store.openFileDiff(fileParam)
+    })
+  }
+})
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <template>
@@ -53,7 +73,11 @@ async function open() {
         @select="store.select($event)"
         @load-more="store.loadMore()"
       />
-      <DetailPanel :detail="store.detail" :loading="store.detailLoading" />
+      <DetailPanel
+        :detail="store.detail"
+        :loading="store.detailLoading"
+        @open-file="store.openFileDiff($event)"
+      />
     </main>
 
     <main v-else class="flex min-h-0 flex-1">
@@ -71,5 +95,13 @@ async function open() {
         </div>
       </div>
     </main>
+
+    <DiffView
+      v-if="store.diffFile"
+      :file="store.diffFile"
+      :diff="store.diff"
+      :loading="store.diffLoading"
+      @close="store.closeDiff()"
+    />
   </div>
 </template>

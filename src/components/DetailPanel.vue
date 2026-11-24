@@ -7,6 +7,8 @@ defineProps<{
   loading?: boolean
 }>()
 
+const emit = defineEmits<{ (e: 'open-file', file: string): void }>()
+
 function statusColor(p: string) {
   return p.includes('新增') ? 'text-emerald-400' : 'text-slate-400'
 }
@@ -51,7 +53,8 @@ function statusColor(p: string) {
         <li
           v-for="f in detail.files"
           :key="f.path"
-          class="flex items-center gap-2 px-4 py-[5px] text-[12px] hover:bg-white/[0.03]"
+          class="flex cursor-pointer items-center gap-2 px-4 py-[5px] text-[12px] hover:bg-white/[0.05]"
+          @click="emit('open-file', f.path)"
         >
           <span class="min-w-0 flex-1 truncate font-mono" :class="statusColor(f.status)">{{ f.path }}</span>
           <span class="shrink-0 text-emerald-400">+{{ f.additions }}</span>

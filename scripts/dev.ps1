@@ -11,7 +11,7 @@ Write-Host '[gitpanel] starting dev bridge on http://127.0.0.1:7717 ...' -Foregr
 $bridge = Start-Process -FilePath 'node' -ArgumentList 'devserver/server.mjs' -WorkingDirectory $root -PassThru -WindowStyle Hidden
 
 try {
-    Write-Host '[gitpanel] starting vite on http://127.0.0.1:5173 ...' -ForegroundColor Cyan
+    Write-Host '[gitpanel] starting vite on http://127.0.0.1:5273 ...' -ForegroundColor Cyan
     pnpm exec vite
 }
 finally {

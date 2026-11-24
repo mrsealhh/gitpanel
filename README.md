@@ -2,6 +2,10 @@
 
 本地、离线、轻量的 Git 可视化管理面板。分支树 / 历史提交 / 分支管理 / 常用操作，全功能一次到位。
 
+![提交图](docs/screenshot-graph.png)
+
+![并排 Diff](docs/screenshot-diff.png)
+
 ## 技术栈
 
 | 层 | 技术 |
@@ -32,9 +36,11 @@ pnpm install
 powershell -ExecutionPolicy Bypass -File scripts/dev.ps1
 ```
 
-打开 http://127.0.0.1:5173 ，在顶部输入任意本机仓库路径即可浏览分支树。
+打开 http://127.0.0.1:5273 ，在顶部输入任意本机仓库路径即可浏览分支树，点右侧文件列表进入并排 Diff。
 
-> 想分开跑：`node devserver/server.mjs`（端口 7717）+ `pnpm dev`（端口 5173）。
+> 想分开跑：`node devserver/server.mjs`（端口 7717）+ `pnpm dev`（端口 5273）。
+>
+> 端口 5173 是 vite 默认端口，本机常被其他项目占用，这里固定用 5273。
 
 ### 2. Rust 内核
 
@@ -65,6 +71,7 @@ powershell -ExecutionPolicy Bypass -File scripts/clean-target.ps1 -Clean   # 清
 | 读取 refs | 39 ms | 23 ms |
 | 提交遍历 + 泳道布局 | 73 ms | 35 ms |
 | 提交详情（含 diff 统计） | 250 ms | 19 ms |
+| 单文件全文对比（file diff） | — | 0.27 ms |
 
 纯布局算法（合成 10 万提交，不碰磁盘）：
 
@@ -80,7 +87,7 @@ layout synth : 188–283 ms   100000 rows, 223531 segments
 - [x] 提交图（泳道布局 + Canvas 渲染 + 虚拟滚动）
 - [x] 提交列表 / 详情 / 文件变更统计
 - [x] Rust 内核 + 布局单测 + 性能基准 CLI
-- [ ] Diff 查看（CodeMirror 6 并排）
+- [x] Diff 查看（CodeMirror 6 并排 + 折叠未变更区 + 按扩展名懒加载语法高亮）
 - [ ] 分支 / 暂存 / 提交 / 推拉
 - [ ] 冲突解决 / 交互式 rebase / 安全网快照
 - [ ] Tauri 打包

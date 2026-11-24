@@ -1,4 +1,4 @@
-import type { CommitDetail, GraphPage, RepoInfo } from './types'
+import type { CommitDetail, FileDiff, GraphPage, RepoInfo } from './types'
 
 /**
  * 数据适配层：前端唯一的数据入口。
@@ -35,5 +35,8 @@ export const api = {
   },
   commit(path: string, oid: string): Promise<CommitDetail> {
     return post<CommitDetail>('/api/commit', { path, oid })
+  },
+  fileDiff(path: string, oid: string, file: string): Promise<FileDiff> {
+    return post<FileDiff>('/api/file-diff', { path, oid, file })
   },
 }

@@ -18,6 +18,54 @@ async function git(repo, args) {
   return stdout
 }
 
+async function gitRaw(repo, args) {
+  const { stdout } = await run('git', ['-C', repo, ...args], {
+    maxBuffer: MAX_BUFFER,
+    windowsHide: true,
+    encoding: 'buffer',
+  })
+  return stdout
+}
+
+const MAX_TEXT = 400_000
+
+function looksBinary(buf) {
+  return buf.subarray(0, 8000).includes(0)
+}
+
+async function tryBlob(repo, revPath) {
+  try {
+    return await gitRaw(repo, ['show', revPath])
+  } catch {
+    return Buffer.alloc(0)
+  }
+}
+
+/** 取某文件在「父提交 vs 当前提交」两个版本的全文，交给前端做并排合并视图 */
+async function fileDiff(repoPath, oid, file) {
+  let parent = ''
+  try {
+    parent = (await git(repoPath, ['rev-parse', `${oid}^`])).trim()
+  } catch {
+    parent = ''
+  }
+
+  const oldBuf = parent ? await tryBlob(repoPath, `${parent}:${file}`) : Buffer.alloc(0)
+  const newBuf = await tryBlob(repoPath, `${oid}:${file}`)
+
+  if (looksBinary(oldBuf) || looksBinary(newBuf)) {
+    return { path: file, oldText: '', newText: '', isBinary: true, truncated: false }
+  }
+
+  return {
+    path: file,
+    oldText: oldBuf.subarray(0, MAX_TEXT).toString('utf8'),
+    newText: newBuf.subarray(0, MAX_TEXT).toString('utf8'),
+    isBinary: false,
+    truncated: oldBuf.length > MAX_TEXT || newBuf.length > MAX_TEXT,
+  }
+}
+
 const SEP = '\x1f'
 const REC = '\x1e'
 
@@ -227,6 +275,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/open') return send(res, 200, await openRepo(body.path))
     if (url.pathname === '/api/graph') return send(res, 200, await graphPage(body.path, body))
     if (url.pathname === '/api/commit') return send(res, 200, await commitDetail(body.path, body.oid))
+    if (url.pathname === '/api/file-diff') {
+      return send(res, 200, await fileDiff(body.path, body.oid, body.file))
+    }
 
     send(res, 404, { error: 'not found' })
   } catch (e) {

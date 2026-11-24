@@ -75,3 +75,12 @@ export interface CommitDetail {
   additions: number
   deletions: number
 }
+
+/** 单个文件的「父版本 / 当前版本」全文，用于并排合并视图 */
+export interface FileDiff {
+  path: string
+  oldText: string
+  newText: string
+  isBinary: boolean
+  truncated: boolean
+}
