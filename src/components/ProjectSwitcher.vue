@@ -40,6 +40,13 @@ const items = computed(() => {
 
 const canClone = computed(() => /^(https?:\/\/|git@|ssh:\/\/)/.test(url.value.trim()))
 
+/** 粘贴的是本地路径（盘符 / UNC）时，直接当「打开本地仓库」 */
+const isLocalPath = computed(
+  () => /^[a-zA-Z]:[\\/]/.test(url.value.trim()) || url.value.trim().startsWith('\\\\'),
+)
+
+const canSubmit = computed(() => canClone.value || isLocalPath.value)
+
 function place() {
   const r = btn.value?.getBoundingClientRect()
   if (!r) return
@@ -69,8 +76,12 @@ function pick(path: string) {
 }
 
 function doClone() {
-  if (!canClone.value) return
-  emit('clone', url.value.trim())
+  if (!canSubmit.value) return
+  if (isLocalPath.value) {
+    emit('open', url.value.trim())
+  } else {
+    emit('clone', url.value.trim())
+  }
   open.value = false
 }
 
@@ -187,19 +198,21 @@ onBeforeUnmount(() => {
           <input
             v-model="url"
             class="field min-w-0 flex-1 px-2 py-1 font-mono text-[11px]"
-            placeholder="粘贴 .git 地址，例如 https://github.com/o/r.git"
+            placeholder="粘贴 .git 地址或本地路径，例如 https://github.com/o/r.git"
             @keydown.enter="doClone"
           />
           <button
             class="btn btn-primary shrink-0 px-2 py-1 text-[11px]"
-            :disabled="!canClone"
-            :style="!canClone ? { opacity: 0.45 } : {}"
+            :disabled="!canSubmit"
+            :style="!canSubmit ? { opacity: 0.45 } : {}"
             @click="doClone"
           >
-            克隆
+            {{ isLocalPath ? '打开' : '克隆' }}
           </button>
         </div>
-        <div class="mt-1 text-[10px] t3">支持 https / ssh / git@ 地址，克隆目录会再让你选一次</div>
+        <div class="mt-1 text-[10px] t3">
+          支持 https / ssh / git@ 地址（克隆目录再选一次），也可以直接粘贴本机仓库路径
+        </div>
       </div>
     </div>
   </div>
