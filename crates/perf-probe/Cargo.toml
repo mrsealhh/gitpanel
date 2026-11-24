@@ -1,0 +1,12 @@
+[package]
+name = "perf-probe"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "perf-probe"
+path = "src/main.rs"
+
+[dependencies]
+git-core = { path = "../git-core" }
+anyhow.workspace = true

@@ -1,0 +1,18 @@
+# 本项目编译产物统一输出到 C 盘 SSD，绕开机械盘的随机小文件读写瓶颈。
+# Cargo 会从当前目录向上查找 .cargo/config.toml，因此 src-tauri 也自动生效。
+[build]
+target-dir = "C:/cargo-target/gitpanel"
+
+# 国内网络下用系统 git 拉取依赖，比内置 libgit2 更稳（支持代理与凭据）
+[net]
+git-fetch-with-cli = true
+
+# crates.io 镜像（rsproxy）。若在公司网络不可用，删掉下面 5 行即可回退官方源。
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[alias]
+ck = "check"

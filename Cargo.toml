@@ -1,0 +1,18 @@
+[workspace]
+members = ["crates/git-core", "crates/perf-probe"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+git2 = "0.19"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3

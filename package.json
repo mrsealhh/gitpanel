@@ -1,0 +1,34 @@
+{
+  "name": "gitpanel",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:bridge": "node devserver/server.mjs",
+    "dev:all": "concurrently -k -n bridge,web -c cyan,green \"node devserver/server.mjs\" \"vite\"",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit",
+    "rust:check": "cargo check --workspace",
+    "rust:test": "cargo test --workspace",
+    "rust:probe": "cargo run -p perf-probe --",
+    "rust:size": "powershell -ExecutionPolicy Bypass -File scripts/clean-target.ps1",
+    "rust:clean": "powershell -ExecutionPolicy Bypass -File scripts/clean-target.ps1 -Clean"
+  },
+  "dependencies": {
+    "pinia": "^4.1.0",
+    "vue": "^3.5.44"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/node": "^24.19.2",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "@vue/tsconfig": "^0.9.1",
+    "concurrently": "^10.0.7",
+    "tailwindcss": "^4.3.5",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.6",
+    "vue-tsc": "^3.3.14"
+  }
+}

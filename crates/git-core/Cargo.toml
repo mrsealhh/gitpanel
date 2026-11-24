@@ -1,0 +1,12 @@
+[package]
+name = "git-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "git_core"
+
+[dependencies]
+git2.workspace = true
+serde.workspace = true
+anyhow.workspace = true
