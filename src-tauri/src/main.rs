@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -192,6 +194,7 @@ struct Db(Mutex<Connection>);
 struct RecentRepo {
     path: String,
     name: String,
+    alias: String,
     opened_at: i64,
     pinned: bool,
 }
@@ -218,6 +221,9 @@ fn open_db(app: &AppHandle) -> Result<Connection> {
             last_used_at INTEGER NOT NULL
         );",
     )?;
+    // 老库升级：补 alias 列（已存在会报错，忽略即可）
+    let _ = conn.execute("ALTER TABLE recent ADD COLUMN alias TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE worktree_meta ADD COLUMN task TEXT NOT NULL DEFAULT ''", []);
     Ok(conn)
 }
 
@@ -232,19 +238,114 @@ fn now_ms() -> i64 {
 fn recent_list(db: tauri::State<Db>) -> Result<Vec<RecentRepo>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT path, name, opened_at, pinned FROM recent ORDER BY pinned DESC, opened_at DESC LIMIT 50")
+        .prepare("SELECT path, name, alias, opened_at, pinned FROM recent ORDER BY pinned DESC, opened_at DESC LIMIT 50")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
             Ok(RecentRepo {
                 path: r.get(0)?,
                 name: r.get(1)?,
-                opened_at: r.get(2)?,
-                pinned: r.get::<_, i64>(3)? != 0,
+                alias: r.get(2)?,
+                opened_at: r.get(3)?,
+                pinned: r.get::<_, i64>(4)? != 0,
             })
         })
         .map_err(|e| e.to_string())?;
     rows.collect::<std::result::Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+/// 项目重命名：名字全局唯一，重复时自动补 1、2、3
+#[tauri::command]
+fn project_rename(path: String, alias: String, db: tauri::State<Db>) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+
+    let mut taken: Vec<String> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT path, name, alias FROM recent")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows.flatten() {
+            if row.0 == path {
+                continue;
+            }
+            let display = if row.2.trim().is_empty() { row.1 } else { row.2 };
+            taken.push(display.to_lowercase());
+        }
+    }
+
+    let base = alias.trim().to_string();
+    if base.is_empty() {
+        conn.execute("UPDATE recent SET alias = '' WHERE path = ?1", [path])
+            .map_err(|e| e.to_string())?;
+        return Ok(String::new());
+    }
+
+    let mut final_name = base.clone();
+    let mut n = 1;
+    while taken.contains(&final_name.to_lowercase()) {
+        final_name = format!("{base}{n}");
+        n += 1;
+    }
+
+    conn.execute(
+        "UPDATE recent SET alias = ?2 WHERE path = ?1",
+        rusqlite::params![path, final_name],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(final_name)
+}
+
+/// 克隆仓库到指定目录
+#[tauri::command]
+fn clone_repo(url: String, target: String) -> Result<String, String> {
+    let u = url.trim();
+    if !(u.starts_with("https://") || u.starts_with("http://") || u.starts_with("git@") || u.starts_with("ssh://")) {
+        return Err("只支持 http(s) / ssh / git@ 形式的仓库地址".into());
+    }
+    let t = std::path::PathBuf::from(target.trim());
+    if target.trim().is_empty() {
+        return Err("请选择目标目录".into());
+    }
+    if t.exists() && std::fs::read_dir(&t).map(|mut d| d.next().is_some()).unwrap_or(false) {
+        return Err("目标目录已存在且非空".into());
+    }
+
+    let out = std::process::Command::new("git")
+        .args(["clone", "--progress", u])
+        .arg(&t)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if out.status.success() {
+        Ok(t.to_string_lossy().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// 本机 git 身份（只读，不保存任何凭据）
+#[tauri::command]
+fn git_identity() -> Value {
+    let get = |key: &str| {
+        std::process::Command::new("git")
+            .args(["config", "--global", "--get", key])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    };
+    json!({ "name": get("user.name"), "email": get("user.email") })
 }
 
 #[tauri::command]
@@ -285,6 +386,7 @@ fn recent_pin(path: String, pinned: bool, db: tauri::State<Db>) -> Result<(), St
 struct WorktreeMeta {
     agent: String,
     note: String,
+    task: String,
     created_at: i64,
     last_used_at: i64,
 }
@@ -295,7 +397,7 @@ fn worktree_meta_list(
 ) -> Result<std::collections::HashMap<String, WorktreeMeta>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT path, agent, note, created_at, last_used_at FROM worktree_meta")
+        .prepare("SELECT path, agent, note, task, created_at, last_used_at FROM worktree_meta")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
@@ -304,8 +406,9 @@ fn worktree_meta_list(
                 WorktreeMeta {
                     agent: r.get(1)?,
                     note: r.get(2)?,
-                    created_at: r.get(3)?,
-                    last_used_at: r.get(4)?,
+                    task: r.get(3)?,
+                    created_at: r.get(4)?,
+                    last_used_at: r.get(5)?,
                 },
             ))
         })
@@ -324,15 +427,16 @@ fn worktree_meta_set(
     path: String,
     agent: String,
     note: String,
+    task: String,
     db: tauri::State<Db>,
 ) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let now = now_ms();
     conn.execute(
-        "INSERT INTO worktree_meta (path, agent, note, created_at, last_used_at)
-         VALUES (?1, ?2, ?3, ?4, ?4)
-         ON CONFLICT(path) DO UPDATE SET agent = ?2, note = ?3",
-        rusqlite::params![path, agent, note, now],
+        "INSERT INTO worktree_meta (path, agent, note, task, created_at, last_used_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+         ON CONFLICT(path) DO UPDATE SET agent = ?2, note = ?3, task = ?4",
+        rusqlite::params![path, agent, note, task, now],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -525,6 +629,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let conn = open_db(&handle).expect("无法初始化本地数据库");
@@ -552,7 +657,10 @@ fn main() {
             worktree_meta_list,
             worktree_meta_set,
             worktree_meta_touch,
-            repos_overview
+            repos_overview,
+            project_rename,
+            clone_repo,
+            git_identity
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitPanel");

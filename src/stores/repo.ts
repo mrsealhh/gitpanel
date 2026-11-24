@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from '../api/git'
-import { recentList, recentPin, recentRemove, recentTouch } from '../api/desktop'
+import { recentList, recentPin, recentRemove, recentTouch, recentRename, cloneRepo, gitIdentity } from '../api/desktop'
 import type { RecentRepo } from '../api/desktop'
 import type {
   BlameLine,
@@ -53,6 +53,8 @@ export const useRepoStore = defineStore('repo', {
     error: '',
     tip: '',
     search: '',
+    dateFrom: '',
+    dateTo: '',
     selected: null as CommitRow | null,
     detail: null as CommitDetail | null,
     detailLoading: false,
@@ -107,6 +109,10 @@ export const useRepoStore = defineStore('repo', {
     overview: [] as RepoOverview[],
     overviewLoading: false,
 
+    // 项目 / 身份
+    identity: { name: '', email: '' },
+    identityDismissed: false,
+
     // 文件历史 / Blame / 体检
     fileHistoryFile: '',
     fileHistory: [] as FileHistoryEntry[],
@@ -121,14 +127,25 @@ export const useRepoStore = defineStore('repo', {
     remotesRefs: (s) => s.info?.refs.filter((r) => r.kind === 'remote') ?? [],
     filteredRows: (s) => {
       const kw = s.search.trim().toLowerCase()
-      if (!kw) return s.rows
-      return s.rows.filter(
-        (r) =>
-          r.summary.toLowerCase().includes(kw) ||
-          r.author.toLowerCase().includes(kw) ||
-          r.short.toLowerCase().includes(kw) ||
-          r.refs.some((b) => b.name.toLowerCase().includes(kw)),
-      )
+      let rows = s.rows
+      if (kw) {
+        rows = rows.filter(
+          (r) =>
+            r.summary.toLowerCase().includes(kw) ||
+            r.author.toLowerCase().includes(kw) ||
+            r.short.toLowerCase().includes(kw) ||
+            r.refs.some((b) => b.name.toLowerCase().includes(kw)),
+        )
+      }
+      if (s.dateFrom) {
+        const from = Math.floor(new Date(`${s.dateFrom}T00:00:00`).getTime() / 1000)
+        rows = rows.filter((r) => r.time >= from)
+      }
+      if (s.dateTo) {
+        const to = Math.floor(new Date(`${s.dateTo}T23:59:59`).getTime() / 1000)
+        rows = rows.filter((r) => r.time <= to)
+      }
+      return rows
     },
     originWeb: (s) => s.remotes.find((r) => r.name === 'origin')?.web ?? s.remotes[0]?.web ?? '',
   },
@@ -146,6 +163,8 @@ export const useRepoStore = defineStore('repo', {
         await this.refreshRebaseStatus()
         const first = this.rows[0]
         if (first) await this.select(first)
+        // 新项目：检查本机是否有 git 身份（只看不改，不保存）
+        void this.checkIdentity()
       } catch (e) {
         this.info = null
         this.rows = []
@@ -180,6 +199,26 @@ export const useRepoStore = defineStore('repo', {
     async forget(path: string) {
       await recentRemove(path)
       await this.loadRecents()
+    },
+
+    async checkIdentity() {
+      this.identity = await gitIdentity()
+    },
+
+    async renameProject(path: string, alias: string) {
+      const final = await recentRename(path, alias)
+      await this.loadRecents()
+      this.notify('ok', final ? `已重命名为 ${final}` : '已恢复默认名称')
+      return final
+    },
+
+    /** 克隆并打开：返回新仓库路径，由调用方负责切过去 */
+    async cloneAndOpen(url: string, target: string): Promise<string> {
+      const path = await cloneRepo(url, target)
+      this.notify('ok', '克隆完成')
+      await recentTouch(path, path.split(/[\\/]/).filter(Boolean).pop() || path)
+      await this.loadRecents()
+      return path
     },
 
     async pinRecent(path: string, pinned: boolean) {
@@ -787,11 +826,21 @@ export const useRepoStore = defineStore('repo', {
       newBranch: boolean
       base?: string
       agent?: string
+      task?: string
     }): Promise<string | null> {
       if (!this.path) return null
       try {
-        const res = await api.addWorktree(this.path, opts)
-        if (opts.agent) await api.worktreeMetaSet(this.path, res.path, opts.agent).catch(() => null)
+        const res = await api.addWorktree(this.path, {
+          target: opts.target,
+          branch: opts.branch,
+          newBranch: opts.newBranch,
+          base: opts.base,
+        })
+        if (opts.agent || opts.task) {
+          await api
+            .worktreeMetaSet(this.path, res.path, opts.agent ?? '', '', opts.task ?? '')
+            .catch(() => null)
+        }
         this.notify('ok', `已创建工作树：${res.path}`)
         await this.loadWorktrees()
         return res.path
@@ -805,9 +854,23 @@ export const useRepoStore = defineStore('repo', {
     async setWorktreeAgent(wtPath: string, agent: string) {
       if (!this.path) return
       try {
-        await api.worktreeMetaSet(this.path, wtPath, agent)
+        const prev = this.worktreeMeta[wtPath]
+        await api.worktreeMetaSet(this.path, wtPath, agent, prev?.note ?? '', prev?.task ?? '')
         await this.loadWorktrees()
         this.notify('ok', agent ? `已标记为 ${agent}` : '已清除标记')
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    /** 记录这个副本「在做什么」（prompt / issue 链接） */
+    async setWorktreeTask(wtPath: string, task: string) {
+      if (!this.path) return
+      try {
+        const prev = this.worktreeMeta[wtPath]
+        await api.worktreeMetaSet(this.path, wtPath, prev?.agent ?? '', prev?.note ?? '', task)
+        await this.loadWorktrees()
+        this.notify('ok', '任务已记录')
       } catch (e) {
         this.notify('err', String((e as Error).message || e))
       }

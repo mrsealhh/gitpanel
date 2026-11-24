@@ -504,13 +504,19 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await ops.worktreeMetaList(body.path))
     }
     if (url.pathname === '/api/worktree-meta-set') {
-      return send(res, 200, await ops.worktreeMetaSet(body.path, body.wtPath, body.agent, body.note))
+      return send(res, 200, await ops.worktreeMetaSet(body.path, body.wtPath, body.agent, body.note, body.task))
     }
     if (url.pathname === '/api/worktree-meta-touch') {
       return send(res, 200, await ops.worktreeMetaTouch(body.path, body.wtPath))
     }
     if (url.pathname === '/api/repos-overview') {
       return send(res, 200, await ops.reposOverview(body.paths))
+    }
+    if (url.pathname === '/api/clone') {
+      return send(res, 200, await ops.cloneRepo(body.url, body.target))
+    }
+    if (url.pathname === '/api/git-identity') {
+      return send(res, 200, await ops.gitIdentity())
     }
 
     // ── 交互式 rebase ──

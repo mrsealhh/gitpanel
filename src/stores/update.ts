@@ -61,7 +61,10 @@ export const useUpdateStore = defineStore('update', {
           this.phase = 'available'
         } catch (e) {
           this.phase = 'error'
-          this.message = String((e as Error).message || e)
+          const raw = String((e as Error).message || e)
+          this.message = /release JSON|404|Not Found/i.test(raw)
+            ? '还没有已发布的版本可更新（或网络不可达）'
+            : raw
         }
         return
       }

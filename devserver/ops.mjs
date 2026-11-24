@@ -506,6 +506,25 @@ export async function listWorktrees(repo) {
   const raw = await git(['worktree', 'list', '--porcelain'])
   const entries = parseWorktreeList(raw)
 
+  // 是否已合回主干
+  let trunk = 'HEAD'
+  for (const b of ['main', 'master']) {
+    try {
+      await git(['rev-parse', '--verify', `refs/heads/${b}`])
+      trunk = b
+      break
+    } catch {
+      /* 试下一个 */
+    }
+  }
+  let mergedList = ''
+  try {
+    mergedList = await git(['branch', '--merged', trunk, '--format=%(refname:short)'])
+  } catch {
+    mergedList = ''
+  }
+  const mergedSet = new Set(mergedList.split('\n').map((s) => s.trim()).filter(Boolean))
+
   const enriched = await Promise.all(
     entries.map(async (wt) => {
       const item = {
@@ -524,6 +543,7 @@ export async function listWorktrees(repo) {
         behind: 0,
         lastCommit: 0,
         aiHints: [],
+        merged: wt.branch ? mergedSet.has(wt.branch) : false,
       }
 
       if (item.exists && !item.bare) {
@@ -769,7 +789,7 @@ export async function worktreeMetaList(repo) {
   }
 }
 
-export async function worktreeMetaSet(repo, wtPath, agent, note) {
+export async function worktreeMetaSet(repo, wtPath, agent, note, task) {
   const file = metaFile(repo)
   let all = {}
   try {
@@ -783,6 +803,7 @@ export async function worktreeMetaSet(repo, wtPath, agent, note) {
   all[key] = {
     agent: agent ?? prev.agent ?? '',
     note: note ?? prev.note ?? '',
+    task: task ?? prev.task ?? '',
     createdAt: prev.createdAt ?? now,
     lastUsedAt: now,
   }
@@ -792,7 +813,7 @@ export async function worktreeMetaSet(repo, wtPath, agent, note) {
 }
 
 export async function worktreeMetaTouch(repo, wtPath) {
-  return worktreeMetaSet(repo, wtPath, undefined, undefined)
+  return worktreeMetaSet(repo, wtPath, undefined, undefined, undefined)
 }
 
 /** 多仓库看板：把给定的仓库路径补上分支/漂移/脏文件/工作树数 */
@@ -834,6 +855,41 @@ export async function reposOverview(paths) {
     }),
   )
   return { repos: out }
+}
+
+/* ────────────────────────── 项目 / 克隆 / 身份 ────────────────────────── */
+
+export async function cloneRepo(url, target) {
+  const u = String(url || '').trim()
+  if (!/^(https?:\/\/|git@|ssh:\/\/)/.test(u)) throw new Error('只支持 http(s) / ssh / git@ 形式的仓库地址')
+  const t = path.resolve(String(target || '').trim())
+  if (!target || !String(target).trim()) throw new Error('请选择目标目录')
+  if (fs.existsSync(t) && fs.readdirSync(t).length > 0) throw new Error('目标目录已存在且非空')
+
+  try {
+    const { stdout, stderr } = await run('git', ['clone', '--progress', u, t], {
+      windowsHide: true,
+      maxBuffer: MAX_BUFFER,
+      timeout: 300_000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      encoding: 'utf8',
+    })
+    return { ok: true, path: t.replace(/\\/g, '/'), output: (stdout + stderr).trim() }
+  } catch (e) {
+    throw new Error(String(e.stderr || e.message || e))
+  }
+}
+
+export async function gitIdentity() {
+  const get = async (key) => {
+    try {
+      const out = await run('git', ['config', '--global', '--get', key], { encoding: 'utf8', windowsHide: true })
+      return (out.stdout || '').trim()
+    } catch {
+      return ''
+    }
+  }
+  return { name: await get('user.name'), email: await get('user.email') }
 }
 
 /* ────────────────────────── 交互式 rebase ────────────────────────── */

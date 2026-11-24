@@ -13,9 +13,10 @@ const props = defineProps<{
   file: string
   diff: FileDiff | null
   loading?: boolean
+  fullscreen?: boolean
 }>()
 
-const emit = defineEmits<{ (e: 'close'): void }>()
+const emit = defineEmits<{ (e: 'close'): void; (e: 'toggle-fullscreen'): void }>()
 
 const settings = useSettingsStore()
 const host = ref<HTMLElement | null>(null)
@@ -146,8 +147,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-40 flex flex-col" :style="{ background: 'var(--bg)' }">
-    <header class="line-b flex h-11 shrink-0 items-center gap-3 px-4" :style="{ background: 'var(--panel)' }">
+  <div class="flex h-full min-h-0 flex-col" :style="{ background: 'var(--bg)' }">
+    <header class="line-b flex h-10 shrink-0 items-center gap-3 px-4" :style="{ background: 'var(--panel)' }">
       <span class="truncate font-mono text-[12px] t2">{{ file }}</span>
       <span v-if="diff && !diff.isBinary" class="shrink-0 text-[11px] t3">
         {{ diff.oldText.split('\n').length }} → {{ diff.newText.split('\n').length }} 行
@@ -155,7 +156,10 @@ onBeforeUnmount(() => {
       <span v-if="diff?.truncated" class="shrink-0 rounded px-1.5 py-0.5 text-[11px]" :style="{ background: 'var(--badge-tag-bg)', color: 'var(--badge-tag-fg)' }">
         文件过大，已截断
       </span>
-      <button class="btn ml-auto" @click="emit('close')">关闭 (Esc)</button>
+      <button class="btn ml-auto" :title="fullscreen ? '退出全屏' : '全屏查看'" @click="emit('toggle-fullscreen')">
+        {{ fullscreen ? '退出全屏' : '全屏' }}
+      </button>
+      <button class="btn" @click="emit('close')">关闭 (Esc)</button>
     </header>
 
     <div v-if="loading" class="p-6 text-sm t3">加载文件内容…</div>

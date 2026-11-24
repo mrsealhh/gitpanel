@@ -53,6 +53,12 @@ interface Persisted {
   autoCheckUpdate: boolean
   /** 检查到更新后自动下载安装（静默更新） */
   autoInstallUpdate: boolean
+  /** 左侧面板宽度 / 是否显示 */
+  leftWidth: number
+  showLeft: boolean
+  /** 右侧面板宽度 / 是否显示 */
+  rightWidth: number
+  showRight: boolean
 }
 
 function load(): Persisted {
@@ -67,6 +73,10 @@ function load(): Persisted {
     closeAction: 'tray',
     autoCheckUpdate: true,
     autoInstallUpdate: false,
+    leftWidth: 240,
+    showLeft: true,
+    rightWidth: 340,
+    showRight: true,
   }
   try {
     return { ...fallback, ...JSON.parse(localStorage.getItem(KEY) || '{}') }
@@ -120,6 +130,10 @@ export const useSettingsStore = defineStore('settings', {
         closeAction,
         autoCheckUpdate,
         autoInstallUpdate,
+        leftWidth,
+        showLeft,
+        rightWidth,
+        showRight,
       } = this
       localStorage.setItem(
         KEY,
@@ -134,6 +148,10 @@ export const useSettingsStore = defineStore('settings', {
           closeAction,
           autoCheckUpdate,
           autoInstallUpdate,
+          leftWidth,
+          showLeft,
+          rightWidth,
+          showRight,
         }),
       )
     },
@@ -149,6 +167,10 @@ export const useSettingsStore = defineStore('settings', {
       this.closeAction = 'tray'
       this.autoCheckUpdate = true
       this.autoInstallUpdate = false
+      this.leftWidth = 240
+      this.showLeft = true
+      this.rightWidth = 340
+      this.showRight = true
       this.applyTheme()
     },
   },

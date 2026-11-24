@@ -25,7 +25,7 @@ function statusColor(s: string) {
 </script>
 
 <template>
-  <aside class="flex h-full w-[340px] shrink-0 flex-col" :style="{ background: 'var(--panel)', borderLeft: '1px solid var(--border)' }">
+  <aside class="flex h-full w-full shrink-0 flex-col" :style="{ background: 'var(--panel)', borderLeft: '1px solid var(--border)' }">
     <div v-if="loading" class="p-4 text-sm t3">加载提交详情…</div>
     <div v-else-if="!detail" class="p-4 text-sm t3">选择一条提交查看详情</div>
     <div v-else class="flex min-h-0 flex-1 flex-col">

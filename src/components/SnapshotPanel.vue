@@ -36,6 +36,11 @@ async function reset(oid: string, mode: 'soft' | 'mixed' | 'hard') {
     <div class="min-h-0 flex-1 overflow-y-auto">
       <div class="px-3 py-2 text-[11px] leading-relaxed t3">
         丢弃、合并、拉取、回滚等操作前会自动打快照，随时能回到操作前。
+        <div class="mt-1.5 space-y-0.5">
+          <div><span class="rounded px-1" :style="{ background: 'var(--panel-3)' }">软</span> 只移动分支指针，改动全部保留在暂存区</div>
+          <div><span class="rounded px-1" :style="{ background: 'var(--panel-3)' }">混</span> 移动指针并清空暂存区，工作区文件改动保留</div>
+          <div><span class="rounded px-1" :style="{ background: 'var(--panel-3)' }">硬</span> 移动指针并丢弃暂存区与工作区的全部改动</div>
+        </div>
       </div>
 
       <div v-if="repo.snapshotsLoading" class="px-3 py-2 text-[12px] t3">读取中…</div>

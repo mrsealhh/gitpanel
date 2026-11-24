@@ -255,6 +255,7 @@ export interface WorktreeInfo {
   behind: number
   lastCommit: number
   aiHints: string[]
+  merged: boolean
 }
 
 /* ── 文件历史 / Blame / 体检 ── */
@@ -301,6 +302,7 @@ export interface RepoHealth {
 export interface WorktreeMeta {
   agent: string
   note: string
+  task: string
   createdAt: number
   lastUsedAt: number
 }

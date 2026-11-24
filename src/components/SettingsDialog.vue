@@ -36,8 +36,19 @@ const shortcuts = [
   { keys: 'Esc', desc: '关闭当前面板' },
 ]
 
-const updateStatus = computed(() => {
-  switch (update.phase) {
+const MCP_SNIPPET = `{
+  "mcpServers": {
+    "gitpanel": {
+      "command": "C:\\\\Program Files\\\\GitPanel\\\\gitpanel-mcp.exe"
+    }
+  }
+}`
+
+function copyMcpConfig() {
+  void navigator.clipboard?.writeText(MCP_SNIPPET)
+}
+
+const updateStatus = computed(() => {  switch (update.phase) {
     case 'checking':
       return '检查中…'
     case 'uptodate':
@@ -187,6 +198,22 @@ const updateStatus = computed(() => {
                 {{ s.keys }}
               </kbd>
             </div>
+          </div>
+        </section>
+
+        <section class="mb-6">
+          <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">MCP 接入（给第三方 AI）</h3>
+          <p class="mb-2 text-[11px] leading-relaxed t3">
+            `gitpanel-mcp.exe` 是一个 stdio MCP 服务端，Claude Desktop / Cursor / Continue 等可直接调用，
+            能读取仓库信息，也能执行暂存、提交、建分支、工作树等写操作。
+          </p>
+          <pre
+            class="mb-2 overflow-x-auto rounded border p-2 font-mono text-[10px] leading-relaxed"
+            :style="{ borderColor: 'var(--border)', background: 'var(--panel-2)', color: 'var(--text-dim)' }"
+          >{ "mcpServers": { "gitpanel": { "command": "&lt;安装目录&gt;\\gitpanel-mcp.exe" } } }</pre>
+          <div class="flex flex-wrap items-center gap-2">
+            <button class="btn" @click="copyMcpConfig">复制配置</button>
+            <span class="text-[10px] t3">只读模式：设置环境变量 GITPANEL_MCP_READ_ONLY=1</span>
           </div>
         </section>
 

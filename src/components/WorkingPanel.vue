@@ -151,10 +151,10 @@ function open(f: StatusFile, staged: boolean) {
           >
             <span class="w-3 shrink-0 font-mono text-[10px]" :style="{ color: statusColor(f.status) }">{{ f.status }}</span>
             <span class="min-w-0 flex-1 truncate font-mono t1">{{ f.path }}</span>
-            <button class="shrink-0 text-[10px] accent opacity-0 group-hover:opacity-100" @click.stop="repo.stage([f])">
+            <button class="shrink-0 text-[10px] accent opacity-60 hover:opacity-100" @click.stop="repo.stage([f])">
               暂存
             </button>
-            <button class="shrink-0 text-[10px] text-rose-400 opacity-0 group-hover:opacity-100" @click.stop="discardOne(f)">
+            <button class="shrink-0 text-[10px] text-rose-400 opacity-60 hover:opacity-100" @click.stop="discardOne(f)">
               丢弃
             </button>
           </div>
@@ -175,10 +175,10 @@ function open(f: StatusFile, staged: boolean) {
           >
             <span class="w-3 shrink-0 font-mono text-[10px]" style="color: var(--badge-head-fg)">U</span>
             <span class="min-w-0 flex-1 truncate font-mono t2">{{ f.path }}</span>
-            <button class="shrink-0 text-[10px] accent opacity-0 group-hover:opacity-100" @click.stop="repo.stage([f])">
+            <button class="shrink-0 text-[10px] accent opacity-60 hover:opacity-100" @click.stop="repo.stage([f])">
               暂存
             </button>
-            <button class="shrink-0 text-[10px] text-rose-400 opacity-0 group-hover:opacity-100" @click.stop="discardOne(f, true)">
+            <button class="shrink-0 text-[10px] text-rose-400 opacity-60 hover:opacity-100" @click.stop="discardOne(f, true)">
               删除
             </button>
           </div>

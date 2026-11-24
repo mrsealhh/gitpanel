@@ -240,8 +240,9 @@ export const api = {
     wtPath: string,
     agent: string,
     note = '',
+    task = '',
   ): Promise<{ ok: boolean }> {
-    return post<{ ok: boolean }>('/api/worktree-meta-set', { path, wtPath, agent, note })
+    return post<{ ok: boolean }>('/api/worktree-meta-set', { path, wtPath, agent, note, task })
   },
   worktreeMetaTouch(path: string, wtPath: string): Promise<{ ok: boolean }> {
     return post<{ ok: boolean }>('/api/worktree-meta-touch', { path, wtPath })

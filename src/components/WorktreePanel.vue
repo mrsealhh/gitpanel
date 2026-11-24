@@ -9,6 +9,7 @@ const emit = defineEmits<{
   (e: 'create'): void
   (e: 'open', path: string): void
   (e: 'set-agent', path: string): void
+  (e: 'set-task', path: string): void
 }>()
 const repo = useRepoStore()
 
@@ -72,7 +73,20 @@ async function remove(wt: { path: string; dirty: number; isCurrent: boolean }) {
 
         <div class="mt-0.5 truncate font-mono text-[10px] t3" :title="wt.path">{{ wt.path }}</div>
 
+        <div v-if="metaOf(wt.path)?.task" class="mt-0.5 truncate text-[10px]" :title="metaOf(wt.path)?.task"
+          :style="{ color: 'var(--text-dim)' }">
+          ▸ {{ metaOf(wt.path)?.task }}
+        </div>
+
         <div class="mt-0.5 flex items-center gap-2 text-[10px] t3">
+          <span
+            v-if="wt.merged"
+            class="rounded px-1"
+            :style="{ background: 'var(--badge-head-bg)', color: 'var(--badge-head-fg)' }"
+            title="该分支已合回主干"
+          >
+            已合回
+          </span>
           <span
             v-if="metaOf(wt.path)?.agent"
             class="rounded px-1"
@@ -96,10 +110,11 @@ async function remove(wt: { path: string; dirty: number; isCurrent: boolean }) {
           <span class="ml-auto">{{ wt.lastCommit ? relativeTime(lastActive(wt)) : '—' }}</span>
         </div>
 
-        <div class="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100">
+        <div class="mt-1 flex items-center gap-1">
           <button v-if="!wt.isCurrent" class="btn px-1.5 py-0 text-[10px]" @click="emit('open', wt.path)">打开</button>
           <button class="btn px-1.5 py-0 text-[10px]" @click="copyPath(wt.path)">复制路径</button>
           <button class="btn px-1.5 py-0 text-[10px]" @click="emit('set-agent', wt.path)">标记 Agent</button>
+          <button class="btn px-1.5 py-0 text-[10px]" @click="emit('set-task', wt.path)">记录任务</button>
           <button
             v-if="!wt.isCurrent"
             class="btn px-1.5 py-0 text-[10px]"

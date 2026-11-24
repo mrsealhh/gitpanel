@@ -8,9 +8,11 @@ import ContextMenu from './components/ContextMenu.vue'
 import DetailPanel from './components/DetailPanel.vue'
 import DiffView from './components/DiffView.vue'
 import BlameModal from './components/BlameModal.vue'
+import CloneDialog from './components/CloneDialog.vue'
 import DashboardModal from './components/DashboardModal.vue'
 import FileHistoryModal from './components/FileHistoryModal.vue'
 import HealthModal from './components/HealthModal.vue'
+import ProjectSwitcher from './components/ProjectSwitcher.vue'
 import WorktreeDialog from './components/WorktreeDialog.vue'
 import Icon from './components/Icon.vue'
 import IconButton from './components/IconButton.vue'
@@ -34,6 +36,7 @@ import {
   isTauri,
   minimizeWindow,
   openExternal,
+  pickFolder,
   startResize,
   toggleMaximize,
 } from './api/desktop'
@@ -53,8 +56,90 @@ const showPalette = ref(false)
 const showSettings = ref(false)
 const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees'>('branches')
 const maximized = ref(false)
+const diffFullscreen = ref(false)
 const showWorktreeDialog = ref(false)
 const showDashboard = ref(false)
+const showClone = ref(false)
+const showDate = ref(false)
+
+function ymd(d: Date) {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+function setDateRange(preset: 'today' | 'yesterday' | '3d' | '7d' | 'clear') {
+  const now = new Date()
+  if (preset === 'clear') {
+    repo.dateFrom = ''
+    repo.dateTo = ''
+    return
+  }
+  const from = new Date(now)
+  if (preset === 'yesterday') {
+    from.setDate(now.getDate() - 1)
+    repo.dateFrom = ymd(from)
+    repo.dateTo = ymd(from)
+    return
+  }
+  if (preset === '3d') from.setDate(now.getDate() - 2)
+  if (preset === '7d') from.setDate(now.getDate() - 6)
+  repo.dateFrom = ymd(from)
+  repo.dateTo = ymd(now)
+}
+
+/** 原生文件夹选择；浏览器态提示手输 */
+async function browseFolder() {
+  const dir = await pickFolder('选择 Git 仓库目录')
+  if (dir) {
+    pathInput.value = dir
+    await open()
+  } else if (!isTauri) {
+    repo.notify('info', '浏览器模式不支持系统文件夹选择，请直接粘贴路径')
+  }
+}
+
+function onRenameProject(path: string) {
+  const current = repo.recents.find((r) => r.path === path)
+  prompt.value = {
+    title: '重命名项目',
+    label: '显示名称（全局唯一，重名会自动补 1/2/3）',
+    value: current?.alias || current?.name || '',
+    confirmText: '保存',
+    onSubmit: (name) => repo.renameProject(path, name),
+  }
+}
+
+const identityMissing = computed(
+  () => !!repo.info && !repo.identity.email && !repo.identityDismissed,
+)
+
+function closeDiff() {
+  repo.closeDiff()
+  diffFullscreen.value = false
+}
+
+/* ── 面板宽度拖拽 ── */
+function startDrag(side: 'left' | 'right', e: PointerEvent) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startW = side === 'left' ? settings.leftWidth : settings.rightWidth
+
+  const onMove = (ev: PointerEvent) => {
+    const dx = ev.clientX - startX
+    if (side === 'left') {
+      settings.leftWidth = Math.min(520, Math.max(170, startW + dx))
+    } else {
+      settings.rightWidth = Math.min(620, Math.max(240, startW - dx))
+    }
+  }
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onUp)
+    settings.save()
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+}
 
 interface MenuSpec {
   x: number
@@ -149,10 +234,11 @@ function onKey(e: KeyboardEvent) {
     else if (repo.blameFile) repo.closeBlame()
     else if (repo.health) repo.closeHealth()
     else if (showDashboard.value) showDashboard.value = false
+    else if (showClone.value) showClone.value = false
     else if (showWorktreeDialog.value) showWorktreeDialog.value = false
     else if (repo.commandOutput) repo.closeCommandOutput()
     else if (repo.stashDiff) repo.closeStashDiff()
-    else if (repo.diffFile) repo.closeDiff()
+    else if (repo.diffFile) closeDiff()
     else if (repo.conflictFile) repo.closeConflict()
     else if (repo.search) repo.search = ''
     return
@@ -226,6 +312,10 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
         { id: 'merge', label: '合并到当前分支' },
         { id: 'rebase-onto', label: '交互式 rebase 到此分支' },
         { id: 'divider', label: '', divider: true },
+        { id: 'fetch', label: '抓取所有远端（fetch）' },
+        { id: 'pull', label: '拉取当前分支（pull）' },
+        { id: 'push', label: '推送当前分支（push）' },
+        { id: 'divider3', label: '', divider: true },
         { id: 'rename', label: '重命名…' },
         { id: 'delete', label: '删除分支', danger: true },
         { id: 'divider2', label: '', divider: true },
@@ -240,6 +330,9 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
       if (id === 'checkout') await repo.checkoutRef(ref.name)
       else if (id === 'merge') await repo.mergeBranch(ref.name)
       else if (id === 'rebase-onto') await repo.openRebase(ref.name)
+      else if (id === 'fetch') await repo.sync('fetch')
+      else if (id === 'pull') await repo.sync('pull')
+      else if (id === 'push') await repo.sync('push')
       else if (id === 'copy-name') {
         await navigator.clipboard?.writeText(ref.name)
         repo.notify('ok', '已复制名称')
@@ -342,6 +435,18 @@ async function openWorktree(path: string) {
   openPath(path)
 }
 
+/** 记录这个副本在做什么 */
+function onSetWorktreeTask(wtPath: string) {
+  prompt.value = {
+    title: '记录任务',
+    label: '这个副本要做什么（prompt / issue 链接）',
+    value: repo.worktreeMeta[wtPath]?.task ?? '',
+    placeholder: '修复登录超时；https://github.com/org/repo/issues/123',
+    confirmText: '保存任务',
+    onSubmit: (task) => repo.setWorktreeTask(wtPath, task),
+  }
+}
+
 async function submitPrompt(value: string, second: string) {
   const p = prompt.value
   prompt.value = null
@@ -418,13 +523,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         <span class="text-[13px] font-semibold t1">GitPanel</span>
       </div>
 
+      <ProjectSwitcher
+        @open="openPath"
+        @rename="onRenameProject"
+        @clone="showClone = true"
+        @browse="browseFolder"
+      />
+
       <input
         v-model="pathInput"
-        class="field min-w-0 max-w-[300px] flex-1 px-2 py-1 font-mono text-[12px]"
+        class="field min-w-0 max-w-[220px] flex-1 px-2 py-1 font-mono text-[12px]"
         placeholder="仓库路径，例如 F:\\gitlab\\myrepo"
         @keydown.enter="open"
       />
       <button class="btn btn-primary shrink-0" @click="open">打开</button>
+      <IconButton name="folder" title="选择本地文件夹" :size="15" @click="browseFolder" />
 
       <div class="relative hidden shrink-0 lg:block">
         <input
@@ -441,6 +554,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       </span>
 
       <div class="ml-auto flex shrink-0 items-center gap-0.5">
+        <IconButton name="panel-left" title="显示/隐藏左侧面板" :active="settings.showLeft" :size="15" @click="settings.showLeft = !settings.showLeft; settings.save()" />
+        <IconButton name="panel-right" title="显示/隐藏右侧面板" :active="settings.showRight" :size="15" @click="settings.showRight = !settings.showRight; settings.save()" />
+        <span class="mx-1 h-4 w-px" :style="{ background: 'var(--border)' }" />
         <button
           v-if="update.hasUpdate || update.phase === 'downloading' || update.phase === 'installing'"
           class="mr-1 rounded px-1.5 py-0.5 text-[11px]"
@@ -454,8 +570,38 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         </button>
 
         <IconButton name="fetch" title="Fetch：抓取远端更新" :disabled="!!repo.syncing" @click="repo.sync('fetch')" />
-        <IconButton name="pull" :title="`Pull：拉取并合并${repo.status?.behind ? `（落后 ${repo.status.behind}）` : ''}`" :disabled="!!repo.syncing" @click="repo.sync('pull')" />
-        <IconButton name="push" :title="`Push：推送到远端${repo.status?.ahead ? `（领先 ${repo.status.ahead}）` : ''}`" :disabled="!!repo.syncing" @click="repo.sync('push')" />
+        <div class="relative">
+          <IconButton name="pull" :title="`Pull：拉取并合并${repo.status?.behind ? `（落后 ${repo.status.behind}）` : ''}`" :disabled="!!repo.syncing" @click="repo.sync('pull')" />
+          <span v-if="repo.status?.behind" class="count-badge">{{ repo.status.behind }}</span>
+        </div>
+        <div class="relative">
+          <IconButton name="push" :title="`Push：推送到远端${repo.status?.ahead ? `（领先 ${repo.status.ahead}）` : ''}`" :disabled="!!repo.syncing" @click="repo.sync('push')" />
+          <span v-if="repo.status?.ahead" class="count-badge">{{ repo.status.ahead }}</span>
+        </div>
+
+        <div class="relative">
+          <IconButton
+            name="calendar"
+            title="按提交日期筛选"
+            :active="!!repo.dateFrom || !!repo.dateTo"
+            @click="showDate = !showDate"
+          />
+          <div v-if="showDate" class="modal animate-pop absolute right-0 top-full z-50 mt-1 w-[250px] p-3">
+            <div class="mb-2 flex gap-1">
+              <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('today')">今日</button>
+              <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('yesterday')">昨日</button>
+              <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('3d')">近三天</button>
+              <button class="btn px-1.5 py-0 text-[10px]" @click="setDateRange('7d')">近一周</button>
+            </div>
+            <label class="mb-1 block text-[10px] t3">起始</label>
+            <input v-model="repo.dateFrom" type="date" class="field mb-2 w-full px-2 py-1 text-[11px]" />
+            <label class="mb-1 block text-[10px] t3">结束</label>
+            <input v-model="repo.dateTo" type="date" class="field w-full px-2 py-1 text-[11px]" />
+            <div class="mt-2 flex justify-end">
+              <button class="btn px-2 py-0.5 text-[10px]" @click="setDateRange('clear'); showDate = false">清除</button>
+            </div>
+          </div>
+        </div>
 
         <span class="mx-1 h-4 w-px" :style="{ background: 'var(--border)' }" />
 
@@ -473,13 +619,29 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       </div>
     </header>
 
-    <main v-if="repo.info" class="flex min-h-0 flex-1">
-      <div class="flex h-full w-[240px] shrink-0 flex-col" :style="{ borderRight: '1px solid var(--border)' }">
-        <div class="flex shrink-0 items-center" :style="{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }">
+    <!-- 本机 git 身份提示（只读检查，不保存凭据） -->
+    <div
+      v-if="identityMissing"
+      class="line-b flex items-center gap-2 px-3 py-1.5 text-[11px]"
+      :style="{ background: 'rgba(251,146,60,.10)', color: '#fb923c' }"
+    >
+      <span class="shrink-0 font-medium">本机未配置 git 身份</span>
+      <span class="min-w-0 truncate t3">
+        请在终端执行 git config --global user.name "..." 与 user.email "..."；GitPanel 只读取本机配置，不保存任何凭据。
+      </span>
+      <button class="btn ml-auto shrink-0 px-2 py-0 text-[10px]" @click="repo.identityDismissed = true">知道了</button>
+    </div>
+
+    <main v-if="repo.info" class="flex min-h-0 flex-1">      <div
+        v-if="settings.showLeft"
+        class="flex h-full shrink-0 flex-col"
+        :style="{ width: settings.leftWidth + 'px', borderRight: '1px solid var(--border)' }"
+      >
+        <div class="flex h-8 shrink-0 items-center" :style="{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }">
           <button
             v-for="t in (['branches', 'working', 'stashes', 'snapshots', 'worktrees'] as const)"
             :key="t"
-            class="flex-1 px-0.5 py-1.5 text-[11px]"
+            class="flex h-8 flex-1 items-center justify-center px-0.5 text-[11px] leading-none"
             :style="
               leftTab === t
                 ? { color: 'var(--text)', boxShadow: 'inset 0 -2px 0 var(--accent)' }
@@ -517,20 +679,45 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           @create="openCreateWorktree"
           @open="openWorktree"
           @set-agent="onSetWorktreeAgent"
+          @set-task="onSetWorktreeTask"
         />
         <SnapshotPanel v-else class="min-h-0 flex-1" />
       </div>
 
-      <CommitList
-        class="min-w-0 flex-1"
-        :rows="repo.filteredRows"
-        :selected-oid="repo.selected?.oid"
-        :loading="repo.loading"
-        @select="repo.select($event)"
-        @load-more="repo.loadMore()"
-        @context="onCommitContext"
-      />
+      <div v-if="settings.showLeft" class="panel-resizer" @pointerdown="startDrag('left', $event)" />
+
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div
+          v-if="repo.diffFile"
+          :class="diffFullscreen ? 'fixed inset-0 z-40 flex' : 'flex min-h-0 flex-1'"
+          :style="diffFullscreen ? { background: 'var(--bg)' } : {}"
+        >
+          <DiffView
+            class="min-w-0 flex-1"
+            :file="repo.diffFile"
+            :diff="repo.diff"
+            :loading="repo.diffLoading"
+            :fullscreen="diffFullscreen"
+            @toggle-fullscreen="diffFullscreen = !diffFullscreen"
+            @close="closeDiff()"
+          />
+        </div>
+        <CommitList
+          v-else
+          class="min-w-0 flex-1"
+          :rows="repo.filteredRows"
+          :selected-oid="repo.selected?.oid"
+          :loading="repo.loading"
+          @select="repo.select($event)"
+          @load-more="repo.loadMore()"
+          @context="onCommitContext"
+        />
+      </div>
+
+      <div v-if="settings.showRight" class="panel-resizer" @pointerdown="startDrag('right', $event)" />
       <DetailPanel
+        v-if="settings.showRight"
+        :style="{ width: settings.rightWidth + 'px' }"
         :detail="repo.detail"
         :loading="repo.detailLoading"
         @open-file="repo.openFileDiff($event)"
@@ -606,19 +793,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
     <!-- 浮层 -->
     <ConflictResolver v-if="repo.conflictFile" />
-    <DiffView
-      v-if="repo.diffFile"
-      :file="repo.diffFile"
-      :diff="repo.diff"
-      :loading="repo.diffLoading"
-      @close="repo.closeDiff()"
-    />
     <PatchModal />
     <RebaseDialog v-if="repo.rebaseOpen" />
     <FileHistoryModal />
     <BlameModal />
     <HealthModal />
     <DashboardModal v-if="showDashboard" @close="showDashboard = false" @open="openPath" />
+    <CloneDialog v-if="showClone" @close="showClone = false" @cloned="openPath" />
     <WorktreeDialog v-if="showWorktreeDialog" @close="showWorktreeDialog = false" />
     <CommandPalette
       v-if="showPalette"
@@ -669,6 +850,33 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* 面板拖拽分隔条 */
+.count-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.panel-resizer {
+  flex: 0 0 5px;
+  width: 5px;
+  cursor: col-resize;
+  transition: background 0.12s ease;
+}
+.panel-resizer:hover {
+  background: var(--accent-weak);
 }
 
 /* 无边框窗口：8 个方向的缩放手柄 */

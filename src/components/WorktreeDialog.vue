@@ -13,6 +13,7 @@ const repoName = computed(() => repo.info?.name || 'repo')
 const branch = ref('')
 const dir = ref('')
 const agent = ref('')
+const task = ref('')
 
 const target = computed(
   () =>
@@ -30,6 +31,7 @@ async function create() {
     newBranch: true,
     base: 'HEAD',
     agent: agent.value.trim(),
+    task: task.value.trim(),
   })
   emit('close')
 }
@@ -68,6 +70,15 @@ async function create() {
             </button>
             <input v-model="agent" class="field ml-1 w-[110px] px-2 py-0.5 text-[11px]" placeholder="自定义" />
           </div>
+        </div>
+        <div>
+          <label class="mb-1 block text-[11px] t3">这个副本要做什么（prompt / issue 链接，可选）</label>
+          <textarea
+            v-model="task"
+            rows="2"
+            class="field w-full resize-none px-2.5 py-1.5 text-[11px]"
+            placeholder="例如：修复登录超时；https://github.com/org/repo/issues/123"
+          />
         </div>
       </div>
 

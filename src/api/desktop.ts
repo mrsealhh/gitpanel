@@ -7,6 +7,7 @@ export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in
 export interface RecentRepo {
   path: string
   name: string
+  alias: string
   openedAt: number
   pinned: boolean
 }
@@ -48,7 +49,7 @@ export async function recentTouch(path: string, name: string): Promise<void> {
     return
   }
   const list = lsList().filter((r) => r.path !== path)
-  list.unshift({ path, name, openedAt: Date.now(), pinned: false })
+  list.unshift({ path, name, alias: '', openedAt: Date.now(), pinned: false })
   lsSave(list.slice(0, 50))
 }
 
@@ -66,6 +67,75 @@ export async function recentPin(path: string, pinned: boolean): Promise<void> {
     return
   }
   lsSave(lsList().map((r) => (r.path === path ? { ...r, pinned } : r)))
+}
+
+/** 重命名项目：名字全局唯一，冲突自动补 1/2/3，返回最终名称 */
+export async function recentRename(path: string, alias: string): Promise<string> {
+  if (isTauri) {
+    return invoke<string>('project_rename', { path, alias })
+  }
+
+  const list = lsList()
+  const base = alias.trim()
+  if (!base) {
+    lsSave(list.map((r) => (r.path === path ? { ...r, alias: '' } : r)))
+    return ''
+  }
+  const taken = new Set(
+    list.filter((r) => r.path !== path).map((r) => (r.alias || r.name).toLowerCase()),
+  )
+  let finalName = base
+  let n = 1
+  while (taken.has(finalName.toLowerCase())) {
+    finalName = `${base}${n}`
+    n += 1
+  }
+  lsSave(list.map((r) => (r.path === path ? { ...r, alias: finalName } : r)))
+  return finalName
+}
+
+/** 原生文件夹选择；浏览器态返回 null */
+export async function pickFolder(title = '选择文件夹'): Promise<string | null> {
+  if (!isTauri) return null
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const res = await open({ directory: true, multiple: false, title })
+    return typeof res === 'string' ? res : null
+  } catch {
+    return null
+  }
+}
+
+/** 本机 git 身份（只读，不保存凭据） */
+export async function gitIdentity(): Promise<{ name: string; email: string }> {
+  if (!isTauri) {
+    try {
+      const r = await fetch('http://127.0.0.1:7717/api/git-identity', { method: 'POST' })
+      return await r.json()
+    } catch {
+      return { name: '', email: '' }
+    }
+  }
+  try {
+    return await invoke<{ name: string; email: string }>('git_identity')
+  } catch {
+    return { name: '', email: '' }
+  }
+}
+
+/** 克隆仓库（返回新的仓库路径） */
+export async function cloneRepo(url: string, target: string): Promise<string> {
+  if (isTauri) {
+    return invoke<string>('clone_repo', { url, target })
+  }
+  const res = await fetch('http://127.0.0.1:7717/api/clone', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ url, target }),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error((data as { error?: string }).error || '克隆失败')
+  return (data as { path: string }).path
 }
 
 /* ── 外部链接 ── */

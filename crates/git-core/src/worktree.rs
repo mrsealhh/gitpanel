@@ -1099,6 +1099,21 @@ impl Repo {
         let mut list = parse_worktree_list(&out);
         let current = norm_path(&self.path().to_string_lossy());
 
+        // 判定「是否已合回主干」用主干分支（main / master），没有就用 HEAD
+        let trunk = ["main", "master"]
+            .iter()
+            .find(|b| {
+                git_allow_fail(self.path(), &["rev-parse", "--verify", &format!("refs/heads/{b}")])
+                    .is_some()
+            })
+            .copied()
+            .unwrap_or("HEAD");
+        let merged_list = git_allow_fail(
+            self.path(),
+            &["branch", "--merged", trunk, "--format=%(refname:short)"],
+        )
+        .unwrap_or_default();
+
         for wt in list.iter_mut() {
             wt.is_current = wt.path.eq_ignore_ascii_case(&current);
             wt.exists = std::path::Path::new(&wt.path).exists();
@@ -1122,6 +1137,8 @@ impl Repo {
                 .filter(|f| wt_path.join(f).exists())
                 .map(|f| f.to_string())
                 .collect();
+            wt.merged = !wt.branch.is_empty()
+                && merged_list.lines().any(|l| l.trim() == wt.branch);
         }
 
         Ok(list)
@@ -1389,6 +1406,8 @@ pub struct WorktreeInfo {
     pub behind: u32,
     pub last_commit: i64,
     pub ai_hints: Vec<String>,
+    /// 该分支是否已合回主干（main / master）
+    pub merged: bool,
 }
 
 const AI_HINT_FILES: [&str; 4] = ["AGENTS.md", "CLAUDE.md", ".cursor", ".github/copilot-instructions.md"];
@@ -1417,6 +1436,7 @@ fn parse_worktree_list(out: &str) -> Vec<WorktreeInfo> {
                 behind: 0,
                 last_commit: 0,
                 ai_hints: Vec::new(),
+                merged: false,
             });
         } else if let Some(cur) = list.last_mut() {
             if let Some(rest) = line.strip_prefix("HEAD ") {

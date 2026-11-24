@@ -19,6 +19,7 @@ Cargo.lock.bak
 # Tauri
 src-tauri/target/
 src-tauri/gen/
+src-tauri/binaries/
 src-tauri/icons/android/
 src-tauri/icons/ios/
 

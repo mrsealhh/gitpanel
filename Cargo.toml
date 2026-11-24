@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/git-core", "crates/perf-probe", "src-tauri"]
+members = ["crates/git-core", "crates/perf-probe", "crates/gitpanel-mcp", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
