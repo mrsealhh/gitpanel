@@ -55,11 +55,31 @@ powershell -ExecutionPolicy Bypass -File scripts/clean-target.ps1 -Clean   # 清
 前端只认 `src/api/types.ts`，与 `crates/git-core/src/model.rs` 一一对应。
 浏览器态走 `devserver/` 的 HTTP 桥，Tauri 态换成 `invoke()`，**界面代码零改动**。
 
+## 性能基线（本机 i5-13400 / 32G / 项目在机械盘、target 在 SSD）
+
+真实仓库 `postsharp`（318 提交 / 156 refs，机械盘）：
+
+| 操作 | 首次（冷） | 热 |
+|---|---|---|
+| 打开仓库 | 11 ms | 11 ms |
+| 读取 refs | 39 ms | 23 ms |
+| 提交遍历 + 泳道布局 | 73 ms | 35 ms |
+| 提交详情（含 diff 统计） | 250 ms | 19 ms |
+
+纯布局算法（合成 10 万提交，不碰磁盘）：
+
+```
+layout synth : 188–283 ms   100000 rows, 223531 segments
+```
+
+前端产物：`87 KB JS + 20 KB CSS`（gzip 34 KB + 5 KB）。
+
 ## 当前进度
 
 - [x] 仓库打开 / 分支标签
 - [x] 提交图（泳道布局 + Canvas 渲染 + 虚拟滚动）
 - [x] 提交列表 / 详情 / 文件变更统计
+- [x] Rust 内核 + 布局单测 + 性能基准 CLI
 - [ ] Diff 查看（CodeMirror 6 并排）
 - [ ] 分支 / 暂存 / 提交 / 推拉
 - [ ] 冲突解决 / 交互式 rebase / 安全网快照

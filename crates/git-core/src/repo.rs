@@ -221,11 +221,15 @@ impl Repo {
             .cloned()
             .unwrap_or_default();
 
+        let author_sig = commit.author();
+        let author = author_sig.name().unwrap_or("").to_string();
+        let email = author_sig.email().unwrap_or("").to_string();
+
         Ok(CommitDetail {
             oid: commit.id().to_string(),
             short: commit.id().to_string().chars().take(7).collect(),
-            author: commit.author().name().unwrap_or("").to_string(),
-            email: commit.author().email().unwrap_or("").to_string(),
+            author,
+            email,
             time: commit.time().seconds(),
             parents: commit.parent_ids().map(|p| p.to_string()).collect(),
             refs,
