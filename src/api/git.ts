@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core'
 import type {
   CommandResult,
   CommitDetail,
@@ -24,7 +25,15 @@ import type {
  */
 const BASE = (import.meta.env.VITE_API as string | undefined) ?? 'http://127.0.0.1:7717'
 
+/** 桌面态判定：Tauri 会注入 __TAURI_INTERNALS__ */
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
 async function post<T>(path: string, payload: Record<string, unknown>): Promise<T> {
+  // 桌面态：一个通用 RPC 入口，cmd 与 /api/<cmd> 同名，payload 同构
+  if (isTauri) {
+    return invoke<T>('git_call', { cmd: path.replace('/api/', ''), payload })
+  }
+
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -37,6 +46,7 @@ async function post<T>(path: string, payload: Record<string, unknown>): Promise<
 
 export const api = {
   health(): Promise<{ ok: boolean }> {
+    if (isTauri) return Promise.resolve({ ok: true })
     return fetch(`${BASE}/api/health`).then((r) => r.json())
   },
   openRepo(path: string): Promise<RepoInfo> {

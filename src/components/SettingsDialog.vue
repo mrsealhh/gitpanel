@@ -1,11 +1,21 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { DENSITY_LABELS, THEME_LABELS, useSettingsStore } from '../stores/settings'
 import type { Density, ThemeId } from '../stores/settings'
+import { APP_VERSION, REPO_URL, checkUpdate } from '../api/update'
+import type { UpdateInfo } from '../api/update'
+import { isTauri, openExternal } from '../api/desktop'
 
-const emit = defineEmits<{ (e: 'close'): void }>()
+const props = defineProps<{ updateInfo?: UpdateInfo | null }>()
+
+const emit = defineEmits<{
+  (e: 'close'): void
+  (e: 'update', info: UpdateInfo | null): void
+}>()
 
 const settings = useSettingsStore()
+const checking = ref(false)
+const checkResult = ref('')
 
 const themes = computed(() =>
   (Object.keys(THEME_LABELS) as ThemeId[]).map((id) => ({
@@ -31,11 +41,26 @@ const shortcuts = [
   { keys: 'Enter', desc: '查看变更文件 Diff' },
   { keys: 'Esc', desc: '关闭当前面板' },
 ]
+
+async function doCheck() {
+  checking.value = true
+  checkResult.value = ''
+  const info = await checkUpdate()
+  checking.value = false
+  emit('update', info)
+  if (!info) {
+    checkResult.value = '检查失败：网络不可用或仓库还没有发布 Release'
+    return
+  }
+  checkResult.value = info.newer
+    ? `发现新版本 v${info.latest}`
+    : `已是最新版本（v${APP_VERSION}）`
+}
 </script>
 
 <template>
-  <div class="overlay fixed inset-0 z-50 flex items-start justify-center pt-[10vh]" @click.self="emit('close')">
-    <div class="modal animate-pop flex max-h-[76vh] w-[640px] flex-col overflow-hidden">
+  <div class="overlay fixed inset-0 z-50 flex items-start justify-center pt-[8vh]" @click.self="emit('close')">
+    <div class="modal animate-pop flex max-h-[82vh] w-[660px] flex-col overflow-hidden">
       <header class="line-b flex items-center px-5 py-3">
         <h2 class="text-[14px] font-semibold t1">设置</h2>
         <button class="btn ml-auto" @click="emit('close')">关闭</button>
@@ -87,38 +112,71 @@ const shortcuts = [
           <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">显示</h3>
           <label class="flex cursor-pointer items-center justify-between py-1.5">
             <span class="text-[12px] t2">显示分支图</span>
-            <input
-              type="checkbox"
-              v-model="settings.showGraph"
-              class="h-4 w-4 accent-[var(--accent)]"
-              @change="settings.save()"
-            />
+            <input type="checkbox" v-model="settings.showGraph" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
           </label>
           <label class="flex cursor-pointer items-center justify-between py-1.5">
             <span class="text-[12px] t2">相对时间（15 hours ago）</span>
-            <input
-              type="checkbox"
-              v-model="settings.relativeTime"
-              class="h-4 w-4 accent-[var(--accent)]"
-              @change="settings.save()"
-            />
+            <input type="checkbox" v-model="settings.relativeTime" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
           </label>
+          <label class="flex cursor-pointer items-center justify-between py-1.5">
+            <span class="text-[12px] t2">危险操作需二次确认</span>
+            <input type="checkbox" v-model="settings.confirmDangerous" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
+          </label>
+        </section>
+
+        <section v-if="isTauri" class="mb-6">
+          <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">窗口行为</h3>
+          <label class="flex cursor-pointer items-center justify-between py-1.5">
+            <span class="text-[12px] t2">最小化时收进系统托盘</span>
+            <input type="checkbox" v-model="settings.minimizeToTray" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
+          </label>
+          <div class="flex items-center justify-between py-1.5">
+            <span class="text-[12px] t2">点击关闭按钮</span>
+            <div class="flex gap-2">
+              <button
+                class="btn"
+                :style="settings.closeAction === 'tray' ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}"
+                @click="settings.closeAction = 'tray'; settings.save()"
+              >
+                收进托盘
+              </button>
+              <button
+                class="btn"
+                :style="settings.closeAction === 'exit' ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}"
+                @click="settings.closeAction = 'exit'; settings.save()"
+              >
+                直接退出
+              </button>
+            </div>
+          </div>
         </section>
 
         <section class="mb-6">
-          <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">行为</h3>
+          <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">更新</h3>
           <label class="flex cursor-pointer items-center justify-between py-1.5">
-            <span class="text-[12px] t2">危险操作需二次确认</span>
-            <input
-              type="checkbox"
-              v-model="settings.confirmDangerous"
-              class="h-4 w-4 accent-[var(--accent)]"
-              @change="settings.save()"
-            />
+            <span class="text-[12px] t2">启动时自动检查更新</span>
+            <input type="checkbox" v-model="settings.autoCheckUpdate" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
           </label>
+          <div class="mt-2 flex items-center gap-2">
+            <button class="btn" :disabled="checking" @click="doCheck">
+              {{ checking ? '检查中…' : '立即检查更新' }}
+            </button>
+            <span v-if="checkResult" class="text-[11px] t3">{{ checkResult }}</span>
+            <button
+              v-if="props.updateInfo?.newer"
+              class="btn btn-primary"
+              @click="openExternal(props.updateInfo!.url)"
+            >
+              查看 v{{ props.updateInfo!.latest }}
+            </button>
+          </div>
+          <p class="mt-2 text-[11px] leading-relaxed t3">
+            更新源：GitHub Releases。当前为「检查 + 提示 + 跳转下载」；无人值守静默安装需要配置签名
+            密钥并发布带签名的安装包，可后续开启。
+          </p>
         </section>
 
-        <section>
+        <section class="mb-6">
           <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">快捷键</h3>
           <div class="rounded-lg border" :style="{ borderColor: 'var(--border)' }">
             <div
@@ -131,6 +189,20 @@ const shortcuts = [
               <kbd class="rounded border px-1.5 py-0.5 font-mono text-[11px] t3" :style="{ borderColor: 'var(--border)' }">
                 {{ s.keys }}
               </kbd>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">关于</h3>
+          <div class="rounded-lg border px-3 py-2 text-[12px]" :style="{ borderColor: 'var(--border)' }">
+            <div class="flex items-center justify-between">
+              <span class="t2">GitPanel</span>
+              <span class="font-mono text-[11px] t3">v{{ APP_VERSION }}</span>
+            </div>
+            <div class="mt-1.5 flex items-center gap-2">
+              <button class="btn" @click="openExternal(REPO_URL)">GitHub 仓库</button>
+              <span class="text-[11px] t3">本地运行，不上传任何数据</span>
             </div>
           </div>
         </section>

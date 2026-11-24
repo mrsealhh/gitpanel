@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from '../api/git'
+import { recentList, recentPin, recentRemove, recentTouch } from '../api/desktop'
+import type { RecentRepo } from '../api/desktop'
 import type {
   CommandResult,
   CommitDetail,
@@ -19,20 +21,11 @@ import type {
   WorktreeStatus,
 } from '../api/types'
 
-const RECENT_KEY = 'gitpanel.recent'
 const PAGE_SIZE = 400
 
 export interface Notice {
   kind: 'ok' | 'err' | 'info'
   text: string
-}
-
-function loadRecent(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]')
-  } catch {
-    return []
-  }
 }
 
 let noticeTimer: number | undefined
@@ -60,7 +53,7 @@ export const useRepoStore = defineStore('repo', {
     remotes: [] as RemoteInfo[],
     notice: null as Notice | null,
     commandOutput: null as (CommandResult & { title: string }) | null,
-    recent: loadRecent(),
+    recents: [] as RecentRepo[],
 
     // 工作区 / 提交 / 同步
     status: null as WorktreeStatus | null,
@@ -140,9 +133,23 @@ export const useRepoStore = defineStore('repo', {
     },
 
     remember(path: string) {
-      const list = [path, ...this.recent.filter((p) => p !== path)].slice(0, 8)
-      this.recent = list
-      localStorage.setItem(RECENT_KEY, JSON.stringify(list))
+      void recentTouch(path, path.split(/[\\/]/).filter(Boolean).pop() || path).then(() =>
+        this.loadRecents(),
+      )
+    },
+
+    async loadRecents() {
+      this.recents = await recentList()
+    },
+
+    async forget(path: string) {
+      await recentRemove(path)
+      await this.loadRecents()
+    },
+
+    async pinRecent(path: string, pinned: boolean) {
+      await recentPin(path, pinned)
+      await this.loadRecents()
     },
 
     async reload() {

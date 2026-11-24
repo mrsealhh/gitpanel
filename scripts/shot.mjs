@@ -12,11 +12,12 @@ import fs from 'node:fs/promises'
 
 const [, , url, out, ...actions] = process.argv
 if (!url || !out) {
-  console.error('usage: node scripts/shot.mjs <url> <out.png> [action ...]')
+  console.error('usage: node scripts/shot.mjs <url|-> <out.png> [action ...]')
   process.exit(2)
 }
 
-const list = await (await fetch('http://127.0.0.1:9222/json/list')).json()
+const CDP_PORT = process.env.CDP_PORT || '9222'
+const list = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`)).json()
 const page = list.find((t) => t.type === 'page')
 if (!page) {
   console.error('没有可用的 page target')
@@ -55,14 +56,16 @@ async function evaluate(expression) {
 
 await send('Page.enable')
 await send('Runtime.enable')
-await send('Emulation.setDeviceMetricsOverride', {
-  width: 1680,
-  height: 1000,
-  deviceScaleFactor: 1,
-  mobile: false,
-})
-await send('Page.navigate', { url })
-await sleep(2600)
+if (url !== '-') {
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: 1680,
+    height: 1000,
+    deviceScaleFactor: 1,
+    mobile: false,
+  })
+  await send('Page.navigate', { url })
+  await sleep(2600)
+}
 
 for (const action of actions) {
   const idx = action.indexOf(':')

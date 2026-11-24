@@ -16,6 +16,8 @@
 |---|---|
 | ![工作区](docs/screenshot-working.png) | ![冲突](docs/screenshot-conflict.png) |
 
+![桌面版（无边框窗口）](docs/screenshot-desktop.png)
+
 ## 功能
 
 **浏览**
@@ -38,6 +40,11 @@
 - 命令面板 `Ctrl+K`：模糊搜索所有操作、主题、插件命令
 - 插件命令：仓库级 / 用户级 `commands.json`，在面板里执行并展示 stdout/stderr 与退出码
 - 状态栏：当前分支、仓库路径、提交数、插件数、选中 SHA、当前主题
+- **无边框自绘标题栏**：可拖拽、双击最大化、8 方向缩放，窗口按钮跟随主题
+- **系统托盘**：最小化/关闭可收进托盘，托盘菜单可恢复或退出
+- **多项目记忆**：SQLite 记录最近打开的仓库，支持置顶与移除
+- **更新检查**：启动自动检查 GitHub Releases，顶部提示新版本并跳转下载
+- 图标化按钮：常用操作全部用图标 + 悬停提示，节省横向空间
 
 **干活**
 - 工作区三态：已暂存 / 未暂存 / 未跟踪，可单文件或批量暂存、取消暂存、丢弃，点文件直接看工作区 Diff
@@ -54,7 +61,7 @@
 
 | 层 | 技术 |
 |---|---|
-| 桌面壳 | Tauri 2（规划中） |
+| 桌面壳 | Tauri 2（WebView2，安装包 ~10MB） |
 | Git 内核 | Rust：`crates/git-core`（读路径 libgit2，写路径 git CLI） |
 | 前端 | Vue 3 + Vite + TypeScript + Tailwind CSS |
 | 提交图 | Canvas 2D 自绘（只画可视区） |
@@ -74,6 +81,17 @@ scripts/              开发脚本（启动、清理 target、CDP 截图）
 ```
 
 ## 快速开始
+
+### 桌面版（推荐）
+
+```powershell
+pnpm install
+pnpm desktop:dev      # 开发模式（自动起 vite + Tauri 窗口）
+pnpm desktop:build    # 打包安装包（NSIS）
+pnpm desktop:exe      # 只出 exe，不打包安装包
+```
+
+桌面态的数据来自 Rust 内核（`git_call` 单一 RPC 入口），**不需要** 起 devserver。
 
 ### 前端 + 开发数据桥（不需要 Rust）
 
@@ -97,6 +115,35 @@ cargo run -p perf-probe -- --synth 100000
 ```
 
 编译产物输出到 `C:\cargo-target\gitpanel`（见 `.cargo/config.toml`），避免机械盘随机小文件读写瓶颈。
+
+## 桌面打包
+
+`src-tauri/` 是 Tauri 2 外壳，前后端通过**单一 RPC 入口**通信：
+
+```
+前端 api.post('/api/graph', payload)
+  ├─ 浏览器态 → HTTP  → devserver (node)
+  └─ 桌面态   → invoke('git_call', { cmd: 'graph', payload }) → Rust git-core
+```
+
+`cmd` 与 `/api/<cmd>` 同名、`payload` 同构，所以 **UI 代码零分支**，两种运行方式共用一份前端。
+
+```powershell
+pnpm desktop:dev      # 开发：vite + Tauri 窗口（数据走 Rust）
+pnpm desktop:exe      # 只出 exe
+pnpm desktop:build    # 出 NSIS 安装包
+```
+
+产物：`C:\cargo-target\gitpanel\release\gitpanel.exe`（编译产物重定向到 SSD），安装包在
+`release\bundle\nsis\GitPanel_0.1.0_x64-setup.exe`。
+
+命令行打开仓库：
+
+```powershell
+gitpanel.exe D:\code\my-repo
+```
+
+最近打开记录存在 `%APPDATA%\com.gitpanel.desktop\gitpanel.db`（SQLite）。
 
 ## 快捷键
 
@@ -180,8 +227,10 @@ layout synth : 188–283 ms   100000 rows, 223531 segments
 - [x] 标签（创建轻量 / 附注、删除）
 - [x] 分支操作（检出 / 合并 / 重命名 / 删除）
 - [x] reflog 撤销（soft / mixed / hard）
+- [x] Tauri 2 桌面壳（无边框标题栏 / 缩放 / 托盘 / 安装包 2.6MB）
+- [x] 多项目记忆（SQLite）+ 更新检查 + 图标化工具条
 - [ ] 交互式 rebase
-- [ ] Tauri 打包
+- [ ] 静默自动更新（需签名密钥 + 发布签名安装包）
 
 ## 内核一致性
 

@@ -7,6 +7,8 @@ import ConflictResolver from './components/ConflictResolver.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DetailPanel from './components/DetailPanel.vue'
 import DiffView from './components/DiffView.vue'
+import Icon from './components/Icon.vue'
+import IconButton from './components/IconButton.vue'
 import InputDialog from './components/InputDialog.vue'
 import PatchModal from './components/PatchModal.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
@@ -17,17 +19,33 @@ import StatusBar from './components/StatusBar.vue'
 import WorkingPanel from './components/WorkingPanel.vue'
 import type { CommitRow, RepoRef } from './api/types'
 import type { MenuItem } from './types/ui'
+import { startupRepo } from './api/env'
+import {
+  closeWindow,
+  hideToTray,
+  isMaximized,
+  isTauri,
+  minimizeWindow,
+  openExternal,
+  startResize,
+  toggleMaximize,
+} from './api/desktop'
+import type { ResizeDir } from './api/desktop'
+import { APP_VERSION, REPO_URL, checkUpdate } from './api/update'
+import type { UpdateInfo } from './api/update'
 import { useRepoStore } from './stores/repo'
 import { useSettingsStore } from './stores/settings'
 
 const repo = useRepoStore()
 const settings = useSettingsStore()
 
-const pathInput = ref('F:\\gitlab\\gitpanel')
+const pathInput = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
 const showPalette = ref(false)
 const showSettings = ref(false)
 const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots'>('branches')
+const maximized = ref(false)
+const updateInfo = ref<UpdateInfo | null>(null)
 
 interface MenuSpec {
   x: number
@@ -50,10 +68,17 @@ interface PromptSpec {
 const prompt = ref<PromptSpec | null>(null)
 
 async function open() {
+  if (!pathInput.value.trim()) return
   await repo.open(pathInput.value)
   await repo.refreshStatus()
   const s = repo.status
   if (s && !s.clean) leftTab.value = 'working'
+  await repo.loadRecents()
+}
+
+function openPath(p: string) {
+  pathInput.value = p
+  open()
 }
 
 const changeCount = computed(() => {
@@ -61,6 +86,29 @@ const changeCount = computed(() => {
   if (!s) return 0
   return s.staged.length + s.unstaged.length + s.untracked.length + s.conflicted.length
 })
+
+function switchTab(t: 'branches' | 'working' | 'stashes' | 'snapshots') {
+  leftTab.value = t
+  if (t === 'stashes') repo.loadStashes()
+  if (t === 'snapshots') {
+    repo.loadSnapshots()
+    repo.loadReflog()
+  }
+}
+
+/* ── 窗口控制 ── */
+async function onMinimize() {
+  if (settings.minimizeToTray) await hideToTray()
+  else await minimizeWindow()
+}
+
+async function onMaximize() {
+  maximized.value = await toggleMaximize()
+}
+
+async function onClose() {
+  await closeWindow(settings.closeAction)
+}
 
 /* ── 快捷键 ── */
 function onKey(e: KeyboardEvent) {
@@ -137,7 +185,7 @@ function onCommitContext({ row, x, y }: { row: CommitRow; x: number; y: number }
         if (repo.detail?.files.length) repo.openFileDiff(repo.detail.files[0].path)
         else repo.notify('info', '该提交没有文件变更')
       } else if (id === 'open-web') {
-        window.open(repo.originWeb, '_blank')
+        void openExternal(repo.originWeb)
       } else if (id === 'new-branch') {
         openNewBranch(row.oid)
       } else if (id === 'new-tag') {
@@ -235,15 +283,6 @@ async function submitPrompt(value: string, second: string) {
   await p?.onSubmit(value, second)
 }
 
-function switchTab(t: 'branches' | 'working' | 'stashes' | 'snapshots') {
-  leftTab.value = t
-  if (t === 'stashes') repo.loadStashes()
-  if (t === 'snapshots') {
-    repo.loadSnapshots()
-    repo.loadReflog()
-  }
-}
-
 /* ── 主题 ── */
 const themeOrder = ['dark', 'midnight', 'light', 'contrast'] as const
 function cycleTheme() {
@@ -262,9 +301,27 @@ const noticeClass = computed(() => {
   }
 })
 
-onMounted(() => {
+onMounted(async () => {
   settings.init()
   window.addEventListener('keydown', onKey)
+  void repo.loadRecents()
+  maximized.value = await isMaximized()
+
+  if (settings.autoCheckUpdate) {
+    void checkUpdate().then((info) => {
+      if (info?.newer) {
+        updateInfo.value = info
+        repo.notify('info', `发现新版本 ${info.latest}，点击顶部提示查看`)
+      }
+    })
+  }
+
+  const cliRepo = await startupRepo()
+  if (cliRepo) {
+    pathInput.value = cliRepo
+    await open()
+    return
+  }
 
   const params = new URLSearchParams(location.search)
   const repoParam = params.get('repo')
@@ -282,43 +339,67 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 <template>
   <div class="flex h-screen flex-col" :style="{ background: 'var(--bg)', color: 'var(--text)' }">
-    <header class="line-b flex h-11 shrink-0 items-center gap-2 px-3" :style="{ background: 'var(--panel)' }">
-      <div class="mr-1 flex items-center gap-2">
+    <!-- 自绘标题栏：既能拖拽，也是应用主工具条 -->
+    <header
+      class="line-b flex h-11 shrink-0 items-center gap-2 overflow-hidden px-3"
+      :style="{ background: 'var(--panel)' }"
+      data-tauri-drag-region
+    >
+      <div class="mr-1 flex shrink-0 items-center gap-2" data-tauri-drag-region>
         <div class="h-4 w-4 rounded bg-gradient-to-br from-sky-400 to-violet-500" />
         <span class="text-[13px] font-semibold t1">GitPanel</span>
       </div>
 
       <input
         v-model="pathInput"
-        class="field w-[300px] px-2 py-1 font-mono text-[12px]"
+        class="field min-w-0 max-w-[300px] flex-1 px-2 py-1 font-mono text-[12px]"
         placeholder="仓库路径，例如 F:\\gitlab\\myrepo"
         @keydown.enter="open"
       />
-      <button class="btn btn-primary" @click="open">打开</button>
+      <button class="btn btn-primary shrink-0" @click="open">打开</button>
 
-      <div class="relative ml-1">
+      <div class="relative hidden shrink-0 lg:block">
         <input
           ref="searchInput"
           v-model="repo.search"
-          class="field w-[180px] py-1 pl-7 pr-2 text-[12px]"
+          class="field w-[160px] py-1 pl-7 pr-2 text-[12px]"
           placeholder="搜索提交 / 作者"
         />
         <span class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] t3">⌕</span>
       </div>
 
-      <div class="ml-auto flex items-center gap-1.5">
-        <button class="btn" :disabled="!!repo.syncing" @click="repo.sync('fetch')">
-          {{ repo.syncing === 'fetch' ? 'Fetch…' : 'Fetch' }}
-        </button>
-        <button class="btn" :disabled="!!repo.syncing" @click="repo.sync('pull')">
-          Pull<span v-if="repo.status?.behind" class="ml-1" style="color: var(--accent)">↓{{ repo.status.behind }}</span>
-        </button>
-        <button class="btn" :disabled="!!repo.syncing" @click="repo.sync('push')">
-          Push<span v-if="repo.status?.ahead" class="ml-1" style="color: var(--accent)">↑{{ repo.status.ahead }}</span>
-        </button>
-        <button class="btn" title="命令面板 Ctrl+K" @click="showPalette = true">⌘ 命令</button>
-        <button class="btn" title="切换主题" @click="cycleTheme">{{ settings.themeLabel }}</button>
-        <button class="btn" title="设置 Ctrl+," @click="showSettings = true">设置</button>
+      <span v-if="repo.error" class="min-w-0 max-w-[180px] shrink truncate text-[11px] text-rose-400" :title="repo.error">
+        {{ repo.error }}
+      </span>
+
+      <div class="ml-auto flex shrink-0 items-center gap-0.5">
+        <span
+          v-if="updateInfo?.newer"
+          class="mr-1 cursor-pointer rounded px-1.5 py-0.5 text-[11px]"
+          :style="{ background: 'var(--accent-weak)', color: 'var(--accent)' }"
+          :title="`新版本 ${updateInfo.latest}，点击查看`"
+          @click="openExternal(updateInfo.url)"
+        >
+          ↑ v{{ updateInfo.latest }}
+        </span>
+
+        <IconButton name="fetch" title="Fetch：抓取远端更新" :disabled="!!repo.syncing" @click="repo.sync('fetch')" />
+        <IconButton name="pull" :title="`Pull：拉取并合并${repo.status?.behind ? `（落后 ${repo.status.behind}）` : ''}`" :disabled="!!repo.syncing" @click="repo.sync('pull')" />
+        <IconButton name="push" :title="`Push：推送到远端${repo.status?.ahead ? `（领先 ${repo.status.ahead}）` : ''}`" :disabled="!!repo.syncing" @click="repo.sync('push')" />
+
+        <span class="mx-1 h-4 w-px" :style="{ background: 'var(--border)' }" />
+
+        <IconButton name="command" title="命令面板 (Ctrl+K)" @click="showPalette = true" />
+        <IconButton name="theme" :title="`主题：${settings.themeLabel}`" @click="cycleTheme" />
+        <IconButton name="github" title="打开 GitHub 仓库" @click="openExternal(REPO_URL)" />
+        <IconButton name="settings" title="设置 (Ctrl+,)" @click="showSettings = true" />
+
+        <template v-if="isTauri">
+          <span class="mx-1 h-4 w-px" :style="{ background: 'var(--border)' }" />
+          <IconButton name="minus" :title="settings.minimizeToTray ? '最小化到托盘' : '最小化'" @click="onMinimize" />
+          <IconButton :name="maximized ? 'restore' : 'maximize'" :title="maximized ? '还原' : '最大化'" @click="onMaximize" />
+          <IconButton name="close" title="关闭" danger @click="onClose" />
+        </template>
       </div>
     </header>
 
@@ -379,25 +460,65 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     </main>
 
     <main v-else class="flex min-h-0 flex-1">
-      <div class="m-auto w-[520px] max-w-full px-6 text-center">
-        <div class="mb-1 text-[15px] font-semibold t1">打开一个 Git 仓库</div>
-        <div class="mb-6 text-[12px] t3">本地运行，不联网，不上传任何数据</div>
-        <div class="space-y-1 text-left">
-          <button
-            v-for="p in repo.recent"
-            :key="p"
-            class="row-hover block w-full truncate rounded border px-3 py-2 text-left font-mono text-[12px] t2"
-            :style="{ borderColor: 'var(--border)' }"
-            @click="pathInput = p; open()"
+      <div class="m-auto w-[560px] max-w-full px-6">
+        <div class="mb-1 text-center text-[15px] font-semibold t1">打开一个 Git 仓库</div>
+        <div class="mb-5 text-center text-[12px] t3">本地运行，不联网，不上传任何数据</div>
+
+        <div v-if="repo.recents.length" class="mb-4">
+          <div class="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide t3">最近打开</div>
+          <div
+            v-for="r in repo.recents"
+            :key="r.path"
+            class="row-hover group flex cursor-pointer items-center gap-2 rounded px-2 py-1.5"
+            @click="openPath(r.path)"
           >
-            {{ p }}
-          </button>
+            <Icon name="folder" :size="14" class="shrink-0 t3" />
+            <span class="shrink-0 text-[12px] t1">{{ r.name }}</span>
+            <span class="min-w-0 flex-1 truncate font-mono text-[11px] t3">{{ r.path }}</span>
+            <IconButton
+              name="pin"
+              :title="r.pinned ? '取消置顶' : '置顶'"
+              :active="r.pinned"
+              :size="13"
+              @click.stop="repo.pinRecent(r.path, !r.pinned)"
+            />
+            <IconButton
+              name="trash"
+              title="从列表移除"
+              :size="13"
+              danger
+              @click.stop="repo.forget(r.path)"
+            />
+          </div>
         </div>
-        <div class="mt-6 text-[11px] t3">Ctrl+K 命令面板 · Ctrl+, 设置 · Ctrl+F 搜索</div>
+
+        <div class="mt-6 text-center text-[11px] t3">
+          Ctrl+K 命令面板 · Ctrl+, 设置 · Ctrl+F 搜索 · v{{ APP_VERSION }}
+        </div>
       </div>
     </main>
 
     <StatusBar />
+
+    <!-- 无边框窗口的缩放手柄 -->
+    <div v-if="isTauri" class="resize-layer" aria-hidden="true">
+      <div
+        v-for="dir in ([
+          ['North', 'rh-n'],
+          ['South', 'rh-s'],
+          ['East', 'rh-e'],
+          ['West', 'rh-w'],
+          ['NorthEast', 'rh-ne'],
+          ['NorthWest', 'rh-nw'],
+          ['SouthEast', 'rh-se'],
+          ['SouthWest', 'rh-sw'],
+        ] as [ResizeDir, string][])"
+        :key="dir[0]"
+        class="rh"
+        :class="dir[1]"
+        @pointerdown.prevent="startResize(dir[0])"
+      />
+    </div>
 
     <!-- 浮层 -->
     <ConflictResolver v-if="repo.conflictFile" />
@@ -410,7 +531,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     />
     <PatchModal />
     <CommandPalette v-if="showPalette" @close="showPalette = false" @settings="showSettings = true" />
-    <SettingsDialog v-if="showSettings" @close="showSettings = false" />
+    <SettingsDialog
+      v-if="showSettings"
+      :update-info="updateInfo"
+      @close="showSettings = false"
+      @update="updateInfo = $event"
+    />
     <ContextMenu
       v-if="menu"
       :x="menu.x"
@@ -453,5 +579,73 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* 无边框窗口：8 个方向的缩放手柄 */
+.resize-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 70;
+}
+.resize-layer .rh {
+  position: absolute;
+  pointer-events: auto;
+}
+.rh-n {
+  top: 0;
+  left: 8px;
+  right: 8px;
+  height: 4px;
+  cursor: ns-resize;
+}
+.rh-s {
+  bottom: 0;
+  left: 8px;
+  right: 8px;
+  height: 4px;
+  cursor: ns-resize;
+}
+.rh-e {
+  top: 8px;
+  bottom: 8px;
+  right: 0;
+  width: 4px;
+  cursor: ew-resize;
+}
+.rh-w {
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 4px;
+  cursor: ew-resize;
+}
+.rh-ne {
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 8px;
+  cursor: nesw-resize;
+}
+.rh-nw {
+  top: 0;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  cursor: nwse-resize;
+}
+.rh-se {
+  bottom: 0;
+  right: 0;
+  width: 8px;
+  height: 8px;
+  cursor: nwse-resize;
+}
+.rh-sw {
+  bottom: 0;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  cursor: nesw-resize;
 }
 </style>

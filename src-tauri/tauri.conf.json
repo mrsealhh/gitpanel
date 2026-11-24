@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "GitPanel",
+  "version": "0.1.0",
+  "identifier": "com.gitpanel.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:5273",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "GitPanel",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 940,
+        "minHeight": 600,
+        "resizable": true,
+        "center": true,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "本地 Git 可视化管理面板",
+    "longDescription": "分支树、历史提交、并排 Diff、冲突解决、安全网快照，纯本地运行。"
+  }
+}

@@ -48,8 +48,7 @@ pub struct Snapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConflictBlock {
-    /// text | conflict
+pub struct ConflictBlock {    /// text | conflict
     pub kind: String,
     pub text: Option<String>,
     pub ours: Option<String>,
@@ -68,6 +67,75 @@ pub struct ConflictDetail {
     pub working: String,
     pub has_markers: bool,
     pub blocks: Vec<ConflictBlock>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stash {
+    pub index: usize,
+    pub r#ref: String,
+    pub time: i64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StashDiff {
+    pub r#ref: String,
+    pub files: Vec<StashFile>,
+    pub patch: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StashFile {
+    pub path: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagInfo {
+    pub name: String,
+    pub annotated: bool,
+    pub time: i64,
+    pub subject: String,
+    pub oid: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReflogEntry {
+    pub oid: String,
+    pub short: String,
+    pub selector: String,
+    pub time: i64,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeResult {
+    pub ok: bool,
+    pub conflicts: bool,
+    pub output: String,
+    pub snapshot: Option<String>,
+    pub conflicted: Vec<StatusFile>,
+}
+
+fn looks_binary(buf: &[u8]) -> bool {
+    buf.iter().take(8000).any(|b| *b == 0)
+}
+
+fn blob_to_text(buf: Option<&[u8]>, max: usize) -> String {
+    match buf {
+        Some(b) => {
+            let end = b.len().min(max);
+            String::from_utf8_lossy(&b[..end]).to_string()
+        }
+        None => String::new(),
+    }
 }
 
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
@@ -467,6 +535,331 @@ impl Repo {
     pub fn resolve_side(&self, file: &str, theirs: bool) -> Result<()> {
         let content = self.stage_blob(file, if theirs { 3 } else { 2 });
         self.resolve_conflict(file, &content)
+    }
+    /* ── 暂存 ── */
+
+    pub fn list_stashes(&self) -> Result<Vec<Stash>> {
+        let out = match git_allow_fail(
+            self.path(),
+            &["stash", "list", "--format=%gd%x1f%ct%x1f%gs"],
+        ) {
+            Some(o) => o,
+            None => return Ok(Vec::new()),
+        };
+
+        Ok(out
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .enumerate()
+            .map(|(i, line)| {
+                let mut it = line.split('\u{1f}');
+                let r = it.next().unwrap_or("").to_string();
+                let time = it.next().unwrap_or("0").parse().unwrap_or(0);
+                let message = it.next().unwrap_or("").to_string();
+                Stash {
+                    index: i,
+                    r#ref: if r.is_empty() { format!("stash@{{{i}}}") } else { r },
+                    time,
+                    message,
+                }
+            })
+            .collect())
+    }
+
+    pub fn create_stash(&self, message: &str, include_untracked: bool) -> Result<String> {
+        let mut args = vec!["stash", "push"];
+        let msg = message.trim();
+        if !msg.is_empty() {
+            args.push("-m");
+            args.push(msg);
+        }
+        if include_untracked {
+            args.push("-u");
+        }
+        Ok(git(self.path(), &args)?.trim().to_string())
+    }
+
+    pub fn stash_action(&self, reference: &str, action: &str) -> Result<String> {
+        if !reference.starts_with("stash@{") || !reference.ends_with('}') {
+            bail!("非法的 stash 引用");
+        }
+        let sub = match action {
+            "apply" => "apply",
+            "pop" => "pop",
+            "drop" => "drop",
+            _ => bail!("未知的 stash 操作: {action}"),
+        };
+        Ok(git(self.path(), &["stash", sub, reference])?.trim().to_string())
+    }
+
+    pub fn stash_diff(&self, reference: &str) -> Result<StashDiff> {
+        if !reference.starts_with("stash@{") || !reference.ends_with('}') {
+            bail!("非法的 stash 引用");
+        }
+        let patch = git_allow_fail(
+            self.path(),
+            &["stash", "show", "-p", "--no-color", reference],
+        )
+        .unwrap_or_default();
+
+        let mut files = Vec::new();
+        if let Some(numstat) = git_allow_fail(self.path(), &["stash", "show", "--numstat", reference]) {
+            for line in numstat.lines().filter(|l| !l.trim().is_empty()) {
+                let mut it = line.split('\t');
+                let a = it.next().unwrap_or("0");
+                let d = it.next().unwrap_or("0");
+                let path = it.collect::<Vec<_>>().join("\t");
+                files.push(StashFile {
+                    path,
+                    additions: if a == "-" { 0 } else { a.parse().unwrap_or(0) },
+                    deletions: if d == "-" { 0 } else { d.parse().unwrap_or(0) },
+                });
+            }
+        }
+
+        Ok(StashDiff {
+            r#ref: reference.to_string(),
+            files,
+            patch,
+        })
+    }
+
+    /* ── 标签 ── */
+
+    pub fn list_tags(&self) -> Result<Vec<TagInfo>> {
+        let out = match git_allow_fail(
+            self.path(),
+            &[
+                "for-each-ref",
+                "--format=%(refname:short)%1f%(objecttype)%1f%(taggerdate:unix)%1f%(subject)%1f%(*objectname)%1f%(objectname)",
+                "refs/tags",
+            ],
+        ) {
+            Some(o) => o,
+            None => return Ok(Vec::new()),
+        };
+
+        let mut tags: Vec<TagInfo> = out
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|line| {
+                let mut it = line.split('\u{1f}');
+                let name = it.next().unwrap_or("").to_string();
+                let objtype = it.next().unwrap_or("");
+                let time = it.next().unwrap_or("0").parse().unwrap_or(0);
+                let subject = it.next().unwrap_or("").to_string();
+                let peeled = it.next().unwrap_or("").to_string();
+                let oid = it.next().unwrap_or("").to_string();
+                TagInfo {
+                    name,
+                    annotated: objtype == "tag",
+                    time,
+                    subject,
+                    oid: if peeled.is_empty() { oid } else { peeled },
+                }
+            })
+            .collect();
+
+        tags.sort_by(|a, b| b.time.cmp(&a.time));
+        Ok(tags)
+    }
+
+    pub fn create_tag(&self, name: &str, message: &str, oid: &str) -> Result<()> {
+        if !crate::actions::valid_ref(name) {
+            bail!("非法的标签名");
+        }
+        let mut args: Vec<String> = vec!["tag".into()];
+        if !message.trim().is_empty() {
+            args.push("-a".into());
+            args.push("-m".into());
+            args.push(message.trim().to_string());
+        }
+        args.push(name.to_string());
+        if !oid.is_empty() {
+            if !oid.chars().all(|c| c.is_ascii_hexdigit()) {
+                bail!("非法的提交");
+            }
+            args.push(oid.to_string());
+        }
+        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        git(self.path(), &refs)?;
+        Ok(())
+    }
+
+    pub fn delete_tag(&self, name: &str) -> Result<()> {
+        if !crate::actions::valid_ref(name) {
+            bail!("非法的标签名");
+        }
+        git(self.path(), &["tag", "-d", name])?;
+        Ok(())
+    }
+
+    /* ── reflog ── */
+
+    pub fn reflog(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
+        let n = limit.clamp(1, 500).to_string();
+        let out = match git_allow_fail(
+            self.path(),
+            &["reflog", "--format=%H%x1f%gd%x1f%ct%x1f%gs", "-n", &n],
+        ) {
+            Some(o) => o,
+            None => return Ok(Vec::new()),
+        };
+
+        Ok(out
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|line| {
+                let mut it = line.split('\u{1f}');
+                let oid = it.next().unwrap_or("").to_string();
+                let selector = it.next().unwrap_or("").to_string();
+                let time = it.next().unwrap_or("0").parse().unwrap_or(0);
+                let action = it.next().unwrap_or("").to_string();
+                ReflogEntry {
+                    short: oid.chars().take(7).collect(),
+                    oid,
+                    selector,
+                    time,
+                    action,
+                }
+            })
+            .collect())
+    }
+
+    pub fn reset_to(&self, oid: &str, mode: &str) -> Result<Option<String>> {
+        if !oid.chars().all(|c| c.is_ascii_hexdigit()) || oid.len() < 4 {
+            bail!("非法的提交");
+        }
+        if !matches!(mode, "soft" | "mixed" | "hard") {
+            bail!("非法的重置模式");
+        }
+        let snap = self.create_snapshot(&format!("before-reset-{mode}"))?;
+        git(self.path(), &["reset", &format!("--{mode}"), oid])?;
+        Ok(snap)
+    }
+
+    /* ── 工作区 Diff / 同步 / 分支 ── */
+
+    fn stage_blob_bytes(&self, spec: &str) -> Option<Vec<u8>> {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(self.path())
+            .args(["show", spec])
+            .output()
+            .ok()?;
+        if out.status.success() {
+            Some(out.stdout)
+        } else {
+            None
+        }
+    }
+
+    pub fn worktree_diff(&self, file: &str, staged: bool) -> Result<crate::model::FileDiff> {
+        const MAX: usize = 400_000;
+
+        let (old, new) = if staged {
+            (
+                self.stage_blob_bytes(&format!("HEAD:{file}")),
+                self.stage_blob_bytes(&format!(":0:{file}")),
+            )
+        } else {
+            (
+                self.stage_blob_bytes(&format!(":0:{file}")),
+                fs::read(self.path().join(file)).ok(),
+            )
+        };
+
+        let is_binary = old.as_deref().map(looks_binary).unwrap_or(false)
+            || new.as_deref().map(looks_binary).unwrap_or(false);
+        let truncated = old.as_ref().map(|b| b.len() > MAX).unwrap_or(false)
+            || new.as_ref().map(|b| b.len() > MAX).unwrap_or(false);
+
+        let (old_text, new_text) = if is_binary {
+            (String::new(), String::new())
+        } else {
+            (blob_to_text(old.as_deref(), MAX), blob_to_text(new.as_deref(), MAX))
+        };
+
+        Ok(crate::model::FileDiff {
+            path: file.to_string(),
+            old_text,
+            new_text,
+            is_binary,
+            truncated,
+        })
+    }
+
+    pub fn fetch(&self) -> Result<String> {
+        Ok(git(self.path(), &["fetch", "--all", "--prune"])?.trim().to_string())
+    }
+
+    pub fn pull(&self) -> Result<String> {
+        Ok(git(self.path(), &["pull", "--no-rebase", "--autostash"])?.trim().to_string())
+    }
+
+    pub fn push(&self, force: bool) -> Result<String> {
+        let args: Vec<&str> = if force {
+            vec!["push", "--force-with-lease"]
+        } else {
+            vec!["push"]
+        };
+        Ok(git(self.path(), &args)?.trim().to_string())
+    }
+
+    pub fn merge_branch(&self, name: &str) -> Result<MergeResult> {
+        if !crate::actions::valid_ref(name) {
+            bail!("非法的分支名");
+        }
+        let snapshot = self.create_snapshot("before-merge")?;
+        let current = git(self.path(), &["rev-parse", "--abbrev-ref", "HEAD"])?
+            .trim()
+            .to_string();
+        if current == name {
+            bail!("不能合并当前分支到自己");
+        }
+
+        match git(self.path(), &["merge", "--no-ff", "--no-edit", name]) {
+            Ok(out) => Ok(MergeResult {
+                ok: true,
+                conflicts: false,
+                output: out.trim().to_string(),
+                snapshot,
+                conflicted: Vec::new(),
+            }),
+            Err(e) => {
+                let st = self.worktree_status()?;
+                Ok(MergeResult {
+                    ok: false,
+                    conflicts: !st.conflicted.is_empty(),
+                    output: e.to_string(),
+                    snapshot,
+                    conflicted: st.conflicted,
+                })
+            }
+        }
+    }
+
+    pub fn delete_branch(&self, name: &str, force: bool) -> Result<Option<String>> {
+        if !crate::actions::valid_ref(name) {
+            bail!("非法的分支名");
+        }
+        let current = git(self.path(), &["rev-parse", "--abbrev-ref", "HEAD"])?
+            .trim()
+            .to_string();
+        if current == name {
+            bail!("不能删除当前所在分支");
+        }
+        let snapshot = self.create_snapshot("before-delete-branch")?;
+        git(self.path(), &["branch", if force { "-D" } else { "-d" }, name])?;
+        Ok(snapshot)
+    }
+
+    pub fn rename_branch(&self, from: &str, to: &str) -> Result<()> {
+        if !crate::actions::valid_ref(from) || !crate::actions::valid_ref(to) {
+            bail!("非法的分支名");
+        }
+        git(self.path(), &["branch", "-m", from, to])?;
+        Ok(())
     }
 }
 

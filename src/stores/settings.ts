@@ -45,6 +45,12 @@ interface Persisted {
   showGraph: boolean
   confirmDangerous: boolean
   graphWidth: number
+  /** 最小化按钮：收进托盘 */
+  minimizeToTray: boolean
+  /** 关闭按钮：收进托盘 或 直接退出 */
+  closeAction: 'tray' | 'exit'
+  /** 启动时自动检查更新 */
+  autoCheckUpdate: boolean
 }
 
 function load(): Persisted {
@@ -55,6 +61,9 @@ function load(): Persisted {
     showGraph: true,
     confirmDangerous: true,
     graphWidth: 14,
+    minimizeToTray: true,
+    closeAction: 'tray',
+    autoCheckUpdate: true,
   }
   try {
     return { ...fallback, ...JSON.parse(localStorage.getItem(KEY) || '{}') }
@@ -97,10 +106,30 @@ export const useSettingsStore = defineStore('settings', {
     },
 
     save() {
-      const { theme, density, relativeTime, showGraph, confirmDangerous, graphWidth } = this
+      const {
+        theme,
+        density,
+        relativeTime,
+        showGraph,
+        confirmDangerous,
+        graphWidth,
+        minimizeToTray,
+        closeAction,
+        autoCheckUpdate,
+      } = this
       localStorage.setItem(
         KEY,
-        JSON.stringify({ theme, density, relativeTime, showGraph, confirmDangerous, graphWidth }),
+        JSON.stringify({
+          theme,
+          density,
+          relativeTime,
+          showGraph,
+          confirmDangerous,
+          graphWidth,
+          minimizeToTray,
+          closeAction,
+          autoCheckUpdate,
+        }),
       )
     },
 
@@ -111,6 +140,9 @@ export const useSettingsStore = defineStore('settings', {
       this.showGraph = true
       this.confirmDangerous = true
       this.graphWidth = 14
+      this.minimizeToTray = true
+      this.closeAction = 'tray'
+      this.autoCheckUpdate = true
       this.applyTheme()
     },
   },
