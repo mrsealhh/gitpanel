@@ -332,6 +332,7 @@ export const useRepoStore = defineStore('repo', {
     },
 
     async openFileDiff(file: string) {
+      this.closeEditor()
       this.diffFile = file
       this.diff = null
       this.diffFrom = 0
@@ -385,6 +386,7 @@ export const useRepoStore = defineStore('repo', {
     async openEditor(file: string) {
       if (!this.path) return
       if (this.editorFile === file && this.editor) return
+      this.closeDiff()
       this.editorFile = file
       this.editor = null
       this.editorContent = ''
@@ -448,6 +450,7 @@ export const useRepoStore = defineStore('repo', {
 
     /** 打开任意提交中某文件的 diff（用于文件历史跳转） */    async openFileDiffAt(oid: string, file: string) {
       if (!this.path) return
+      this.closeEditor()
       this.diffFile = file
       this.diff = null
       this.diffFrom = 0
