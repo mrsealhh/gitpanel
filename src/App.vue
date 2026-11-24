@@ -31,13 +31,14 @@ import {
   toggleMaximize,
 } from './api/desktop'
 import type { ResizeDir } from './api/desktop'
-import { APP_VERSION, REPO_URL, checkUpdate } from './api/update'
-import type { UpdateInfo } from './api/update'
+import { APP_VERSION, REPO_URL } from './api/update'
 import { useRepoStore } from './stores/repo'
 import { useSettingsStore } from './stores/settings'
+import { useUpdateStore } from './stores/update'
 
 const repo = useRepoStore()
 const settings = useSettingsStore()
+const update = useUpdateStore()
 
 const pathInput = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
@@ -45,7 +46,6 @@ const showPalette = ref(false)
 const showSettings = ref(false)
 const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots'>('branches')
 const maximized = ref(false)
-const updateInfo = ref<UpdateInfo | null>(null)
 
 interface MenuSpec {
   x: number
@@ -308,10 +308,13 @@ onMounted(async () => {
   maximized.value = await isMaximized()
 
   if (settings.autoCheckUpdate) {
-    void checkUpdate().then((info) => {
-      if (info?.newer) {
-        updateInfo.value = info
-        repo.notify('info', `发现新版本 ${info.latest}，点击顶部提示查看`)
+    void update.check().then(() => {
+      if (update.phase === 'available') {
+        if (settings.autoInstallUpdate) {
+          void update.install()
+        } else {
+          repo.notify('info', `发现新版本 v${update.version}，点击顶部提示一键更新`)
+        }
       }
     })
   }
@@ -373,15 +376,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       </span>
 
       <div class="ml-auto flex shrink-0 items-center gap-0.5">
-        <span
-          v-if="updateInfo?.newer"
-          class="mr-1 cursor-pointer rounded px-1.5 py-0.5 text-[11px]"
+        <button
+          v-if="update.hasUpdate || update.phase === 'downloading' || update.phase === 'installing'"
+          class="mr-1 rounded px-1.5 py-0.5 text-[11px]"
           :style="{ background: 'var(--accent-weak)', color: 'var(--accent)' }"
-          :title="`新版本 ${updateInfo.latest}，点击查看`"
-          @click="openExternal(updateInfo.url)"
+          :title="update.phase === 'available' ? `点击更新到 v${update.version}` : update.message || '正在更新'"
+          @click="update.install()"
         >
-          ↑ v{{ updateInfo.latest }}
-        </span>
+          <template v-if="update.phase === 'available'">↑ 更新 v{{ update.version }}</template>
+          <template v-else-if="update.phase === 'downloading'">下载 {{ update.percent }}%</template>
+          <template v-else>安装中…</template>
+        </button>
 
         <IconButton name="fetch" title="Fetch：抓取远端更新" :disabled="!!repo.syncing" @click="repo.sync('fetch')" />
         <IconButton name="pull" :title="`Pull：拉取并合并${repo.status?.behind ? `（落后 ${repo.status.behind}）` : ''}`" :disabled="!!repo.syncing" @click="repo.sync('pull')" />
@@ -531,12 +536,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     />
     <PatchModal />
     <CommandPalette v-if="showPalette" @close="showPalette = false" @settings="showSettings = true" />
-    <SettingsDialog
-      v-if="showSettings"
-      :update-info="updateInfo"
-      @close="showSettings = false"
-      @update="updateInfo = $event"
-    />
+    <SettingsDialog v-if="showSettings" @close="showSettings = false" />
     <ContextMenu
       v-if="menu"
       :x="menu.x"

@@ -51,6 +51,8 @@ interface Persisted {
   closeAction: 'tray' | 'exit'
   /** 启动时自动检查更新 */
   autoCheckUpdate: boolean
+  /** 检查到更新后自动下载安装（静默更新） */
+  autoInstallUpdate: boolean
 }
 
 function load(): Persisted {
@@ -64,6 +66,7 @@ function load(): Persisted {
     minimizeToTray: true,
     closeAction: 'tray',
     autoCheckUpdate: true,
+    autoInstallUpdate: false,
   }
   try {
     return { ...fallback, ...JSON.parse(localStorage.getItem(KEY) || '{}') }
@@ -116,6 +119,7 @@ export const useSettingsStore = defineStore('settings', {
         minimizeToTray,
         closeAction,
         autoCheckUpdate,
+        autoInstallUpdate,
       } = this
       localStorage.setItem(
         KEY,
@@ -129,6 +133,7 @@ export const useSettingsStore = defineStore('settings', {
           minimizeToTray,
           closeAction,
           autoCheckUpdate,
+          autoInstallUpdate,
         }),
       )
     },
@@ -143,6 +148,7 @@ export const useSettingsStore = defineStore('settings', {
       this.minimizeToTray = true
       this.closeAction = 'tray'
       this.autoCheckUpdate = true
+      this.autoInstallUpdate = false
       this.applyTheme()
     },
   },

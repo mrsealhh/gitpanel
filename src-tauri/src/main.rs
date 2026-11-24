@@ -315,6 +315,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let conn = open_db(&handle).expect("无法初始化本地数据库");

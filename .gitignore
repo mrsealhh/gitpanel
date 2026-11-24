@@ -19,7 +19,6 @@ Cargo.lock.bak
 # Tauri
 src-tauri/target/
 src-tauri/gen/
-# 只需要 Windows 图标，移动端图标由 tauri icon 生成但不入库
 src-tauri/icons/android/
 src-tauri/icons/ios/
 
@@ -33,3 +32,7 @@ src-tauri/icons/ios/
 *.njsproj
 *.sln
 *.sw?
+
+
+# local signing keys (never commit)
+.keys/

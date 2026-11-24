@@ -1,21 +1,15 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { DENSITY_LABELS, THEME_LABELS, useSettingsStore } from '../stores/settings'
 import type { Density, ThemeId } from '../stores/settings'
-import { APP_VERSION, REPO_URL, checkUpdate } from '../api/update'
-import type { UpdateInfo } from '../api/update'
+import { APP_VERSION, REPO_URL } from '../api/update'
 import { isTauri, openExternal } from '../api/desktop'
+import { useUpdateStore } from '../stores/update'
 
-const props = defineProps<{ updateInfo?: UpdateInfo | null }>()
-
-const emit = defineEmits<{
-  (e: 'close'): void
-  (e: 'update', info: UpdateInfo | null): void
-}>()
+const emit = defineEmits<{ (e: 'close'): void }>()
 
 const settings = useSettingsStore()
-const checking = ref(false)
-const checkResult = ref('')
+const update = useUpdateStore()
 
 const themes = computed(() =>
   (Object.keys(THEME_LABELS) as ThemeId[]).map((id) => ({
@@ -42,20 +36,24 @@ const shortcuts = [
   { keys: 'Esc', desc: '关闭当前面板' },
 ]
 
-async function doCheck() {
-  checking.value = true
-  checkResult.value = ''
-  const info = await checkUpdate()
-  checking.value = false
-  emit('update', info)
-  if (!info) {
-    checkResult.value = '检查失败：网络不可用或仓库还没有发布 Release'
-    return
+const updateStatus = computed(() => {
+  switch (update.phase) {
+    case 'checking':
+      return '检查中…'
+    case 'uptodate':
+      return `已是最新版本（v${APP_VERSION}）`
+    case 'available':
+      return `发现新版本 v${update.version}`
+    case 'downloading':
+      return `下载中 ${update.percent}%`
+    case 'installing':
+      return '正在安装，随后自动重启…'
+    case 'error':
+      return update.message || '检查失败'
+    default:
+      return ''
   }
-  checkResult.value = info.newer
-    ? `发现新版本 v${info.latest}`
-    : `已是最新版本（v${APP_VERSION}）`
-}
+})
 </script>
 
 <template>
@@ -157,22 +155,21 @@ async function doCheck() {
             <span class="text-[12px] t2">启动时自动检查更新</span>
             <input type="checkbox" v-model="settings.autoCheckUpdate" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
           </label>
-          <div class="mt-2 flex items-center gap-2">
-            <button class="btn" :disabled="checking" @click="doCheck">
-              {{ checking ? '检查中…' : '立即检查更新' }}
+          <label class="flex cursor-pointer items-center justify-between py-1.5">
+            <span class="text-[12px] t2">发现更新后自动下载安装（静默更新）</span>
+            <input type="checkbox" v-model="settings.autoInstallUpdate" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
+          </label>
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            <button class="btn" :disabled="update.busy" @click="update.check()">
+              {{ update.phase === 'checking' ? '检查中…' : '立即检查更新' }}
             </button>
-            <span v-if="checkResult" class="text-[11px] t3">{{ checkResult }}</span>
-            <button
-              v-if="props.updateInfo?.newer"
-              class="btn btn-primary"
-              @click="openExternal(props.updateInfo!.url)"
-            >
-              查看 v{{ props.updateInfo!.latest }}
+            <button v-if="update.hasUpdate" class="btn btn-primary" @click="update.install()">
+              更新到 v{{ update.version }}
             </button>
+            <span v-if="updateStatus" class="text-[11px] t3">{{ updateStatus }}</span>
           </div>
           <p class="mt-2 text-[11px] leading-relaxed t3">
-            更新源：GitHub Releases。当前为「检查 + 提示 + 跳转下载」；无人值守静默安装需要配置签名
-            密钥并发布带签名的安装包，可后续开启。
+            更新包经 minisign 签名校验，只接受本仓库发布且签名匹配的安装包。静默更新会在后台下载安装并自动重启。
           </p>
         </section>
 

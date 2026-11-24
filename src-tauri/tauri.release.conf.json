@@ -1,0 +1,8 @@
+/* 发布专用配置：只在 CI/正式发版时叠加，避免本地构建依赖签名密钥。
+ * 用法：pnpm tauri build --config src-tauri/tauri.release.conf.json
+ */
+{
+  "bundle": {
+    "createUpdaterArtifacts": true
+  }
+}

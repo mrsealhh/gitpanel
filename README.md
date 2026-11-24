@@ -145,6 +145,46 @@ gitpanel.exe D:\code\my-repo
 
 最近打开记录存在 `%APPDATA%\com.gitpanel.desktop\gitpanel.db`（SQLite）。
 
+## 自动更新与发版
+
+桌面版内置 Tauri updater，更新包用 **minisign 签名**校验，只接受本仓库发布且签名匹配的安装包。
+
+**本地密钥（已生成，`.keys/` 已 gitignore）**
+
+| 文件 | 用途 |
+|---|---|
+| `.keys/gitpanel.key` | 私钥，用来签名更新包。**务必自行备份，丢了就无法再发更新** |
+| `.keys/gitpanel.key.pub` | 公钥，已内嵌到 `tauri.conf.json` 的 `plugins.updater.pubkey` |
+| `.keys/password.txt` | 私钥口令 |
+
+**在 GitHub 配两个 Secrets**（Settings → Secrets and variables → Actions）
+
+| Name | Value |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | `.keys/gitpanel.key` 文件全文 |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `.keys/password.txt` 的内容 |
+
+**发版**
+
+```powershell
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+`.github/workflows/release.yml` 会在 windows-latest 上构建、签名、创建 Release，并生成
+`latest.json`（`src-tauri/tauri.release.conf.json` 打开 `createUpdaterArtifacts`，本地构建不受影响）。
+
+**更新行为**（设置 → 更新）
+
+- 启动时自动检查：默认开启
+- 自动下载安装（静默更新）：开启后检查到新版会在后台下载、安装并自动重启
+- 未开启时顶部出现 `↑ 更新 vX.Y.Z`，点一下即下载安装
+
+更新源：`https://github.com/mrsealhh/gitpanel/releases/latest/download/latest.json`
+
+> 自动更新只对**通过安装包安装**的版本生效（NSIS 安装后由插件替换安装目录里的程序）。
+> 直接拷走的便携 exe 不参与自动替换。
+
 ## 快捷键
 
 | 快捷键 | 作用 |
@@ -229,8 +269,8 @@ layout synth : 188–283 ms   100000 rows, 223531 segments
 - [x] reflog 撤销（soft / mixed / hard）
 - [x] Tauri 2 桌面壳（无边框标题栏 / 缩放 / 托盘 / 安装包 2.6MB）
 - [x] 多项目记忆（SQLite）+ 更新检查 + 图标化工具条
+- [x] 一键/静默更新（minisign 签名 + GitHub Releases 自动发版）
 - [ ] 交互式 rebase
-- [ ] 静默自动更新（需签名密钥 + 发布签名安装包）
 
 ## 内核一致性
 
