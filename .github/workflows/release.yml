@@ -25,7 +25,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const tag = core.getInput('tag') || context.ref.replace('refs/tags/', '')
+            const tag = (context.payload.inputs && context.payload.inputs.tag) || context.ref.replace('refs/tags/', '')
             try {
               const { data } = await github.rest.repos.getReleaseByTag({
                 owner: context.repo.owner,
