@@ -9,7 +9,7 @@ pub mod worktree;
 pub use model::*;
 pub use repo::Repo;
 pub use worktree::{
-    ConflictBlock, ConflictDetail, MergeResult, RebaseCommit, RebaseOutcome, RebaseStatus,
-    RebaseStep, ReflogEntry, SequenceStatus, Snapshot, Stash, StashDiff, StatusFile, TagInfo,
-    WorktreeInfo, WorktreeStatus,
+    BranchStatus, ConflictBlock, ConflictDetail, DiffHunk, FileHunks, MergeResult, RebaseCommit,
+    RebaseOutcome, RebaseStatus, RebaseStep, ReflogEntry, SequenceStatus, Snapshot, Stash,
+    StashDiff, StatusFile, TagInfo, WorktreeInfo, WorktreeStatus,
 };

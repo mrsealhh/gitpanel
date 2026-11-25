@@ -4,7 +4,7 @@ import { useRepoStore } from '../stores/repo'
 import { useSettingsStore } from '../stores/settings'
 import type { StatusFile } from '../api/types'
 
-const emit = defineEmits<{ (e: 'conflict', file: string): void }>()
+const emit = defineEmits<{ (e: 'conflict', file: string): void; (e: 'hunks', payload: { file: string; staged: boolean }): void }>()
 
 const repo = useRepoStore()
 const settings = useSettingsStore()
@@ -48,6 +48,23 @@ function open(f: StatusFile, staged: boolean) {
       <span class="text-[12px] font-semibold t1">工作区</span>
       <span class="ml-2 text-[11px] t3">{{ total }} 项改动</span>
       <button class="btn ml-auto px-2 py-0.5 text-[11px]" @click="repo.refreshStatus()">刷新</button>
+    </div>
+
+    <!-- 待推送 / 待拉取：直接在这里推拉，不用去顶部 -->
+    <div
+      v-if="repo.status?.ahead || repo.status?.behind"
+      class="line-b flex items-center gap-2 px-3 py-1.5 text-[11px]"
+      :style="{ background: 'var(--panel-2)' }"
+    >
+      <span v-if="repo.status?.ahead" :style="{ color: 'var(--accent)' }">↑{{ repo.status.ahead }} 个提交待推送</span>
+      <span v-if="repo.status?.behind" class="t3">↓{{ repo.status.behind }} 个提交待拉取</span>
+      <div class="ml-auto flex shrink-0 items-center gap-1">
+        <button class="btn px-2 py-0 text-[10px]" :disabled="!!repo.syncing" @click="repo.sync('fetch')">抓取</button>
+        <button class="btn px-2 py-0 text-[10px]" :disabled="!!repo.syncing" @click="repo.sync('pull')">拉取</button>
+        <button class="btn btn-primary px-2 py-0 text-[10px]" :disabled="!!repo.syncing" @click="repo.sync('push')">
+          推送
+        </button>
+      </div>
     </div>
 
     <div
@@ -129,6 +146,13 @@ function open(f: StatusFile, staged: boolean) {
             <span class="min-w-0 flex-1 truncate font-mono t1">{{ f.path }}</span>
             <button
               class="shrink-0 text-[10px] t3 opacity-0 hover:accent group-hover:opacity-100"
+              title="按 diff 块取消暂存"
+              @click.stop="emit('hunks', { file: f.path, staged: true })"
+            >
+              分块
+            </button>
+            <button
+              class="shrink-0 text-[10px] t3 opacity-0 hover:accent group-hover:opacity-100"
               @click.stop="repo.unstage([f])"
             >
               取消暂存
@@ -153,6 +177,13 @@ function open(f: StatusFile, staged: boolean) {
             <span class="min-w-0 flex-1 truncate font-mono t1">{{ f.path }}</span>
             <button class="shrink-0 text-[10px] accent opacity-60 hover:opacity-100" @click.stop="repo.stage([f])">
               暂存
+            </button>
+            <button
+              class="shrink-0 text-[10px] t3 opacity-60 hover:opacity-100"
+              title="按 diff 块暂存 / 丢弃"
+              @click.stop="emit('hunks', { file: f.path, staged: false })"
+            >
+              分块
             </button>
             <button class="shrink-0 text-[10px] text-rose-400 opacity-60 hover:opacity-100" @click.stop="discardOne(f)">
               丢弃

@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { buildFileDiff } from './textwin.mjs'
 
@@ -196,6 +197,86 @@ export async function listSnapshots(repo) {
 }
 
 /** 恢复前先给当前 HEAD 再打一个快照，避免二次误操作丢失 */
+export async function deleteSnapshot(repo, ref) {
+  if (!ref || !ref.startsWith(SNAP_PREFIX + '/')) throw new Error('不是安全网快照')
+  const git = makeGit(repo)
+  await git(['update-ref', '-d', ref])
+  return { ok: true }
+}
+
+export async function deleteAllSnapshots(repo) {
+  const { snapshots } = await listSnapshots(repo)
+  const git = makeGit(repo)
+  let count = 0
+  for (const s of snapshots) {
+    try {
+      await git(['update-ref', '-d', s.ref])
+      count += 1
+    } catch {
+      /* 单个失败继续 */
+    }
+  }
+  return { ok: true, count }
+}
+
+/* ── 分支上游状态 ── */
+
+export async function branchStatus(repo) {
+  const git = makeGit(repo)
+  let out = ''
+  try {
+    out = await git([
+      'for-each-ref',
+      '--format=%(refname:short)%1f%(upstream:short)%1f%(upstream:track)%1f%(committerdate:unix)%1f%(HEAD)',
+      'refs/heads',
+    ])
+  } catch {
+    return { branches: [] }
+  }
+  const branches = out
+    .split('\n')
+    .filter((l) => l.trim())
+    .map((line) => {
+      const [name, upstream, track, at, head] = line.split('\x1f')
+      let ahead = 0
+      let behind = 0
+      const m = /^\[(.*)\]$/.exec((track || '').trim())
+      if (m) {
+        for (const piece of m[1].split(',')) {
+          const p = piece.trim()
+          if (p.startsWith('ahead ')) ahead = Number(p.slice(6)) || 0
+          if (p.startsWith('behind ')) behind = Number(p.slice(7)) || 0
+        }
+      }
+      return {
+        name,
+        upstream: upstream || '',
+        ahead,
+        behind,
+        current: (head || '').trim() === '*',
+        lastCommit: Number(at) || 0,
+      }
+    })
+  branches.sort((a, b) => a.name.localeCompare(b.name))
+  return { branches }
+}
+
+export async function deleteRemoteBranch(repo, name) {
+  if (!name || name.startsWith('-')) throw new Error('非法的分支名')
+  const git = makeGit(repo)
+  let upstream = ''
+  try {
+    upstream = (await git(['rev-parse', '--abbrev-ref', `${name}@{upstream}`])).trim()
+  } catch {
+    upstream = ''
+  }
+  const slash = upstream.indexOf('/')
+  const remote = slash > 0 ? upstream.slice(0, slash) : 'origin'
+  const branch = slash > 0 ? upstream.slice(slash + 1) : name
+  const out = await git(['push', remote, '--delete', branch])
+  return { ok: true, output: String(out || '').trim() }
+}
+
 export async function restoreSnapshot(repo, ref) {
   if (!String(ref).startsWith(SNAP_PREFIX + '/')) throw new Error('非法的快照引用')
   const git = makeGit(repo)
@@ -730,8 +811,33 @@ export async function fsList(repo, dir = '') {  const root = path.resolve(repo)
   return { dir: relOf(root, target), entries }
 }
 
-export async function fsRead(repo, file, maxBytes = 2 * 1024 * 1024) {
-  const root = path.resolve(repo)
+/** 在文件内容里搜索（git grep，含未跟踪文件） */
+export async function fsGrep(repo, query, max = 300) {
+  const q = String(query || '')
+  if (!q.trim()) return { hits: [] }
+  const r = spawnSync(
+    'git',
+    ['-C', repo, 'grep', '-n', '-I', '-F', '--untracked', '--no-color', '-e', q, '--', '.'],
+    { encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 },
+  )
+  const text = r.stdout || ''
+  const limit = Math.max(1, max)
+  const hits = []
+  for (const line of text.split('\n')) {
+    if (hits.length >= limit) break
+    const first = line.indexOf(':')
+    if (first < 0) continue
+    const second = line.indexOf(':', first + 1)
+    if (second < 0) continue
+    const file = line.slice(0, first).replace(/^\.\//, '')
+    const no = Number(line.slice(first + 1, second))
+    if (!Number.isFinite(no)) continue
+    hits.push({ file, line: no, text: line.slice(second + 1).trimEnd() })
+  }
+  return { hits, limitReached: hits.length >= limit }
+}
+
+export async function fsRead(repo, file, maxBytes = 2 * 1024 * 1024) {  const root = path.resolve(repo)
   const target = safeJoin(root, file)
   const stat = fs.statSync(target)
   if (!stat.isFile()) throw new Error(`不是文件：${file}`)
@@ -1251,7 +1357,106 @@ export async function sequenceStatus(repo) {
   }
 }
 
-/* 把文件加入 .gitignore */
+/* ────────────────── hunk 级暂存 / 跨提交对比 ────────────────── */
+
+/** 解析 git diff -U3：文件头 + hunks */
+function parseHunks(text) {
+  const header = []
+  const hunks = []
+  let cur = null
+  let isBinary = false
+  for (const line of String(text || '').split('\n')) {
+    if (line.startsWith('Binary files') || line.startsWith('GIT binary patch')) isBinary = true
+    if (line.startsWith('@@')) {
+      if (cur) hunks.push(cur)
+      cur = { header: line, lines: [] }
+    } else if (cur) {
+      cur.lines.push(line)
+    } else if (line !== '' || header.length) {
+      header.push(line)
+    }
+  }
+  if (cur) hunks.push(cur)
+  return { header, hunks, isBinary }
+}
+
+async function rawFileDiff(repo, file, staged) {
+  const git = makeGit(repo)
+  const args = ['diff', '-U3', '--no-color', '--no-ext-diff']
+  if (staged) args.push('--cached')
+  args.push('--', file)
+  try {
+    return await git(args)
+  } catch {
+    return ''
+  }
+}
+
+export async function fileHunks(repo, file, staged) {
+  const text = await rawFileDiff(repo, file, staged)
+  const { header, hunks, isBinary } = parseHunks(text)
+  return { path: file, staged: !!staged, fileHeader: header, hunks, isBinary }
+}
+
+/** mode: stage / unstage / discard */
+export async function applyHunks(repo, file, staged, indexes, mode) {
+  const text = await rawFileDiff(repo, file, staged)
+  const { header, hunks } = parseHunks(text)
+  if (!hunks.length) throw new Error('这个文件没有可操作的 diff 块（可能是二进制或未跟踪文件）')
+  const picked = (indexes || []).filter((i) => hunks[i])
+  if (!picked.length) throw new Error('没有选中任何 diff 块')
+  const parts = [...header]
+  for (const i of picked) {
+    parts.push(hunks[i].header, ...hunks[i].lines)
+  }
+  const patch = parts.join('\n') + '\n'
+  const args = ['apply', '--whitespace=nowarn']
+  if (mode === 'stage') args.push('--cached')
+  else if (mode === 'unstage') args.push('--cached', '--reverse')
+  else if (mode === 'discard') args.push('--reverse')
+  else throw new Error(`未知操作：${mode}`)
+
+  const r = spawnSync('git', ['-C', repo, ...args], {
+    input: patch,
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  if (r.status !== 0) throw new Error((r.stderr || '').trim() || 'git apply 失败')
+  return { ok: true, output: (r.stdout || '').trim() }
+}
+
+/** a..b 之间变更的文件 */
+export async function compareCommits(repo, a, b) {
+  const git = makeGit(repo)
+  const out = await git(['diff', '--name-status', '-z', a, b])
+  const parts = out.split('\0').filter((s) => s !== '')
+  const files = []
+  for (let i = 0; i < parts.length; i += 1) {
+    const status = parts[i]
+    const path = parts[i + 1]
+    if (!path) break
+    const first = status[0] || 'M'
+    if (first === 'R' || first === 'C') i += 1
+    files.push({ path, status: first })
+    i += 1
+  }
+  files.sort((x, y) => x.path.localeCompare(y.path))
+  return { a, b, files }
+}
+
+export async function compareFile(repo, a, b, file, win = {}) {
+  const show = async (rev) => {
+    try {
+      return await gitRaw(repo, ['show', `${rev}:${file}`])
+    } catch {
+      return Buffer.alloc(0)
+    }
+  }
+  const oldBuf = await show(a)
+  const newBuf = await show(b)
+  return buildFileDiff(file, oldBuf, newBuf, win)
+}
+
 export async function ignoreFile(repo, file) {
   const rel = String(file || '').replace(/\\/g, '/')
   if (!rel.trim()) throw new Error('缺少文件路径')

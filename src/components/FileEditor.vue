@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { EditorView, lineNumbers, keymap } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
 import { defaultKeymap, indentWithTab } from '@codemirror/commands'
@@ -34,6 +34,67 @@ const settings = useSettingsStore()
 const host = ref<HTMLElement | null>(null)
 let view: EditorView | null = null
 let seq = 0
+
+/* ── 文件内搜索（Ctrl+F） ── */
+const searchOpen = ref(false)
+const query = ref('')
+const searchInput = ref<HTMLInputElement | null>(null)
+const matchCount = ref(0)
+const matchIndex = ref(0)
+let matchPositions: number[] = []
+
+function computeMatches() {
+  const v = view
+  const q = query.value
+  if (!v || !q) {
+    matchCount.value = 0
+    matchPositions = []
+    return
+  }
+  const doc = v.state.doc.toString()
+  const hay = doc.toLowerCase()
+  const needle = q.toLowerCase()
+  const hits: number[] = []
+  let i = hay.indexOf(needle)
+  while (i >= 0 && hits.length < 5000) {
+    hits.push(i)
+    i = hay.indexOf(needle, i + Math.max(1, needle.length))
+  }
+  matchPositions = hits
+  matchCount.value = hits.length
+  if (matchIndex.value >= hits.length) matchIndex.value = 0
+  jumpTo(matchIndex.value)
+}
+
+function jumpTo(idx: number) {
+  const v = view
+  if (!v || !matchPositions.length) return
+  const pos = matchPositions[(idx + matchPositions.length) % matchPositions.length]
+  v.dispatch({
+    selection: { anchor: pos, head: pos + query.value.length },
+    scrollIntoView: true,
+  })
+  matchIndex.value = (idx + matchPositions.length) % matchPositions.length
+}
+
+function step(delta: number) {
+  if (!matchPositions.length) computeMatches()
+  if (!matchPositions.length) return
+  jumpTo(matchIndex.value + delta)
+}
+
+function openSearch() {
+  searchOpen.value = true
+  nextTick(() => {
+    searchInput.value?.focus()
+    searchInput.value?.select()
+  })
+}
+
+function closeSearch() {
+  searchOpen.value = false
+  view?.focus()
+}
 
 const highlight = HighlightStyle.define([
   { tag: tags.comment, color: '#6b7688', fontStyle: 'italic' },
@@ -111,6 +172,24 @@ async function build() {
         EditorState.readOnly.of(readOnly),
         keymap.of([
           {
+            key: 'Mod-f',
+            preventDefault: true,
+            run: () => {
+              openSearch()
+              return true
+            },
+          },
+          {
+            key: 'Escape',
+            run: () => {
+              if (searchOpen.value) {
+                closeSearch()
+                return true
+              }
+              return false
+            },
+          },
+          {
             key: 'Mod-s',
             preventDefault: true,
             run: () => {
@@ -171,6 +250,7 @@ onBeforeUnmount(() => {
         <span v-if="editable === false" class="mr-1 text-[10px] t3">
           {{ encoding !== 'utf8' && encoding !== 'utf8bom' ? '非 UTF-8，只读' : '过大，只读预览' }}
         </span>
+        <button class="btn" title="在文件内搜索 (Ctrl+F)" @click="openSearch">搜索</button>
         <button class="btn" :disabled="loading" @click="emit('reload')">重新加载</button>
         <button
           class="btn btn-primary"
@@ -184,6 +264,25 @@ onBeforeUnmount(() => {
         <button class="btn" @click="emit('close')">关闭 (Esc)</button>
       </span>
     </header>
+
+    <div v-if="searchOpen" class="line-b flex h-8 shrink-0 items-center gap-2 px-3" :style="{ background: 'var(--panel-2)' }">
+      <span class="shrink-0 text-[11px] t3">文件内搜索</span>
+      <input
+        ref="searchInput"
+        v-model="query"
+        class="field w-[220px] px-2 py-0.5 text-[11px]"
+        placeholder="输入关键字，回车下一个"
+        @input="computeMatches"
+        @keydown.enter.prevent="step(1)"
+        @keydown.esc.prevent="closeSearch"
+      />
+      <span class="shrink-0 text-[11px] t3">
+        {{ matchCount ? `${matchIndex + 1} / ${matchCount}` : query ? '无匹配' : '' }}
+      </span>
+      <button class="btn px-2 py-0 text-[10px]" @click="step(-1)">上一个</button>
+      <button class="btn px-2 py-0 text-[10px]" @click="step(1)">下一个</button>
+      <button class="btn ml-auto px-2 py-0 text-[10px]" @click="closeSearch">关闭</button>
+    </div>
 
     <div v-if="loading" class="p-6 text-sm t3">加载文件…</div>
     <div v-show="!loading" ref="host" class="min-h-0 flex-1 overflow-hidden" />

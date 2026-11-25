@@ -5,13 +5,13 @@ import { recentList, recentPin, recentRemove, recentTouch, recentRename, cloneRe
 import type { RecentRepo } from '../api/desktop'
 import type {
   BlameLine,
+  BranchStatus,
   CommandResult,
   CommitDetail,
   CommitRow,
-  ConflictDetail,
-  FileDiff,
+  CompareFile,
+  ConflictDetail,  FileDiff,
   FileHistoryEntry,
-  FileText,
   MergeResult,
   PluginCommand,
   RebaseCommit,
@@ -43,6 +43,38 @@ export interface Notice {
 
 let noticeTimer: number | undefined
 
+/** 打开中的一个本地文件（编辑器标签） */
+export interface EditorTab {
+  file: string
+  /** 当前编辑内容（LF） */
+  content: string
+  /** 上次保存/加载的内容（LF），用于判断未保存 */
+  saved: string
+  eol: string
+  size: number
+  lines: number
+  editable: boolean
+  encoding: string
+  truncated: boolean
+  loading: boolean
+  saving: boolean
+}
+
+/** 打开中的一个 diff 标签 */
+export interface DiffTab {
+  /** d:<kind>:<oid|a..b>:<staged>:<file> */
+  key: string
+  file: string
+  kind: 'commit' | 'worktree' | 'compare'
+  oid: string
+  staged: boolean
+  a: string
+  b: string
+  diff: FileDiff | null
+  from: number
+  loading: boolean
+}
+
 function countLines(text: string): number {
   if (!text) return 0
   let n = 0
@@ -54,6 +86,19 @@ function joinChunk(head: string, tail: string): string {
   if (!tail) return head
   if (!head) return tail
   return `${head}\n${tail}`
+}
+
+/** diff 标签的唯一键 */
+function diffKey(
+  kind: string,
+  file: string,
+  oid: string,
+  a: string,
+  b: string,
+  staged: boolean,
+): string {
+  const rev = kind === 'compare' ? `${a}..${b}` : kind === 'worktree' ? (staged ? 'index' : 'work') : oid
+  return `${kind}:${rev}:${file}`
 }
 
 export const useRepoStore = defineStore('repo', {
@@ -74,24 +119,13 @@ export const useRepoStore = defineStore('repo', {
     selected: null as CommitRow | null,
     detail: null as CommitDetail | null,
     detailLoading: false,
-    diffFile: '',
-    diff: null as FileDiff | null,
-    diffLoading: false,
-    /** 大文件分段：已加载到第几行（两个版本共用同一个起点） */
-    diffFrom: 0,
-    /** diff 属于哪个提交（继续加载时要用） */
-    diffOid: '',
-    /** 当前 diff 来源：提交 vs 工作区 */
-    diffKind: 'commit' as 'commit' | 'worktree',
 
-    // 本地文件编辑（省去打开别的编辑器）
-    editorFile: '',
-    editor: null as FileText | null,
-    editorContent: '',
-    /** 原文件的换行风格，保存时还原（CodeMirror 会把 CRLF 归一成 LF） */
-    editorEol: '\n' as string,
-    editorLoading: false,
-    editorSaving: false,
+    // 文档标签：编辑器 / diff 都放在同一排标签里，可并行打开多个
+    editorTabs: [] as EditorTab[],
+    diffTabs: [] as DiffTab[],
+    /** 当前激活的标签：f:<path> 或 d:<key> */
+    activeTab: '',
+
     commands: [] as PluginCommand[],
     remotes: [] as RemoteInfo[],
     notice: null as Notice | null,
@@ -100,6 +134,8 @@ export const useRepoStore = defineStore('repo', {
 
     // 工作区 / 提交 / 同步
     status: null as WorktreeStatus | null,
+    /** 各分支的上游与领先 / 落后 */
+    branchStatus: [] as BranchStatus[],
     statusLoading: false,
     commitMessage: '',
     amend: false,
@@ -126,6 +162,13 @@ export const useRepoStore = defineStore('repo', {
 
     // cherry-pick / revert 进行中状态
     sequence: { kind: '', inProgress: false, conflicted: [], pending: 0 } as SequenceStatus,
+
+    // 跨提交对比
+    compareBase: '',
+    compareA: '',
+    compareB: '',
+    compareFiles: [] as CompareFile[],
+    compareOpen: false,
 
     // 交互式 rebase
     rebaseOpen: false,
@@ -182,8 +225,6 @@ export const useRepoStore = defineStore('repo', {
       return rows
     },
     originWeb: (s) => s.remotes.find((r) => r.name === 'origin')?.web ?? s.remotes[0]?.web ?? '',
-    /** 编辑器里有未保存改动 */
-    editorDirty: (s) => !!s.editor && s.editorContent !== s.editor.content,
   },
 
   actions: {
@@ -325,6 +366,41 @@ export const useRepoStore = defineStore('repo', {
       void this.select(list[next])
     },
 
+    /* ── 跨提交 / 分支对比 ── */
+
+    setCompareBase(oid: string) {
+      this.compareBase = oid
+      this.notify('info', `已设对比起点 ${oid.slice(0, 7)}，再右键另一个提交点「与起点对比」`)
+    },
+
+    async openCompare(b: string, a?: string) {
+      if (!this.path) return
+      const base = a || this.compareBase
+      if (!base || base === b) {
+        this.notify('err', '先右键一个提交「设为对比起点」')
+        return
+      }
+      try {
+        this.closeEditor()
+        const r = await api.compare(this.path, base, b)
+        this.compareA = base
+        this.compareB = b
+        this.compareFiles = r.files
+        this.compareOpen = true
+        if (!r.files.length) this.notify('info', '这两个提交之间没有文件差异')
+        else await this.openCompareFile(r.files[0].path)
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    closeCompare() {
+      this.compareOpen = false
+      this.compareFiles = []
+      this.compareA = ''
+      this.compareB = ''
+    },
+
     /* ── cherry-pick / revert ── */
 
     async ignoreFile(file: string) {
@@ -404,139 +480,229 @@ export const useRepoStore = defineStore('repo', {
       return { fromLine: from, maxLines: st.diffMaxLines, maxBytes: 0 }
     },
 
+    /* ── 文档标签：diff ── */
+
     async openFileDiff(file: string) {
-      this.closeEditor()
-      this.diffFile = file
-      this.diff = null
-      this.diffFrom = 0
-      this.diffKind = 'commit'
       if (!this.path || !this.selected) return
-      this.diffOid = this.selected.oid
-      this.diffLoading = true
+      await this.loadDiffTab({ kind: 'commit', file, oid: this.selected.oid, staged: false, a: '', b: '' })
+    },
+
+    /** 打开任意提交里某文件的 diff（文件历史跳转用） */
+    async openFileDiffAt(oid: string, file: string) {
+      if (!this.path) return
+      await this.loadDiffTab({ kind: 'commit', file, oid, staged: false, a: '', b: '' })
+    },
+
+    async openWorktreeDiff(file: string, staged: boolean) {
+      if (!this.path) return
+      await this.loadDiffTab({ kind: 'worktree', file, oid: '', staged, a: '', b: '' })
+    },
+
+    async openCompareFile(file: string) {
+      if (!this.path) return
+      await this.loadDiffTab({ kind: 'compare', file, oid: '', staged: false, a: this.compareA, b: this.compareB })
+    },
+
+    /** 打开（或激活）一个 diff 标签 */
+    async loadDiffTab(cfg: {
+      kind: 'commit' | 'worktree' | 'compare'
+      file: string
+      oid: string
+      staged: boolean
+      a: string
+      b: string
+    }) {
+      if (!this.path) return
+      const key = diffKey(cfg.kind, cfg.file, cfg.oid, cfg.a, cfg.b, cfg.staged)
+      this.activeTab = `d:${key}`
+      if (this.diffTabs.some((t) => t.key === key)) return
+      const tab: DiffTab = {
+        key,
+        file: cfg.file,
+        kind: cfg.kind,
+        oid: cfg.oid,
+        staged: cfg.staged,
+        a: cfg.a,
+        b: cfg.b,
+        diff: null,
+        from: 0,
+        loading: true,
+      }
+      this.diffTabs.push(tab)
+      const live = this.diffTabs[this.diffTabs.length - 1]
+      await this.fetchDiff(live, 0, true)
+    },
+
+    async fetchDiff(tab: DiffTab, from: number, replace: boolean) {
+      if (!this.path) return
+      const win = this.diffWindow(from)
       try {
-        this.diff = await api.fileDiff(this.path, this.diffOid, file, this.diffWindow(0))
+        const next =
+          tab.kind === 'worktree'
+            ? await api.worktreeDiff(this.path, tab.file, tab.staged, win)
+            : tab.kind === 'compare'
+              ? await api.compareFile(this.path, tab.a, tab.b, tab.file, win)
+              : await api.fileDiff(this.path, tab.oid, tab.file, win)
+        if (replace || !tab.diff) {
+          tab.diff = next
+        } else {
+          tab.diff = {
+            ...next,
+            oldText: joinChunk(tab.diff.oldText, next.oldText),
+            newText: joinChunk(tab.diff.newText, next.newText),
+            oldFrom: 0,
+            newFrom: 0,
+          }
+        }
+        tab.from = from
       } catch {
-        this.diff = null
+        if (replace) tab.diff = null
       } finally {
-        this.diffLoading = false
+        tab.loading = false
       }
     },
 
-    /** 大文件分段：把后面一段接上（流式加载，不会一次把整个文件塞进视图） */
+    /** 大文件分段：给当前 diff 标签接上后一段 */
     async loadMoreDiff() {
-      if (!this.path || !this.diffFile || !this.diff?.hasMore || this.diffLoading) return
-      const keep = this.diff
-      const from = this.diffFrom + Math.max(countLines(keep.oldText), countLines(keep.newText))
-      this.diffLoading = true
-      try {
-        const next =
-          this.diffKind === 'worktree'
-            ? await api.worktreeDiff(this.path, this.diffFile, this.diffStaged, this.diffWindow(from))
-            : await api.fileDiff(this.path, this.diffOid, this.diffFile, this.diffWindow(from))
-        this.diff = {
-          ...next,
-          oldText: joinChunk(keep.oldText, next.oldText),
-          newText: joinChunk(keep.newText, next.newText),
-          oldFrom: 0,
-          newFrom: 0,
-        }
-        this.diffFrom = from
-      } catch (e) {
-        this.notify('err', String((e as Error).message || e))
-      } finally {
-        this.diffLoading = false
-      }
+      const tab = this.diffTabs.find((t) => `d:${t.key}` === this.activeTab)
+      if (!tab || !tab.diff?.hasMore || tab.loading) return
+      const from = tab.from + Math.max(countLines(tab.diff.oldText), countLines(tab.diff.newText))
+      tab.loading = true
+      await this.fetchDiff(tab, from, false)
     },
 
     closeDiff() {
-      this.diffFile = ''
-      this.diff = null
-      this.diffFrom = 0
+      const idx = this.diffTabs.findIndex((t) => `d:${t.key}` === this.activeTab)
+      if (idx >= 0) this.diffTabs.splice(idx, 1)
+      this.pickNextTab()
     },
 
-    /* ── 本地文件编辑 ── */
+    closeDiffTab(key: string) {
+      const idx = this.diffTabs.findIndex((t) => t.key === key)
+      const wasActive = idx >= 0 && this.activeTab === `d:${key}`
+      if (idx >= 0) this.diffTabs.splice(idx, 1)
+      if (wasActive) this.pickNextTab()
+    },
+
+    closeAllDocs() {
+      this.diffTabs = []
+      this.editorTabs = []
+      this.activeTab = ''
+    },
+
+    /** 关掉一个标签后，自动切到剩下的最后一个 */
+    pickNextTab() {
+      const d = this.diffTabs[this.diffTabs.length - 1]
+      if (d) {
+        this.activeTab = `d:${d.key}`
+        return
+      }
+      const f = this.editorTabs[this.editorTabs.length - 1]
+      this.activeTab = f ? `f:${f.file}` : ''
+    },
+
+    /* ── 本地文件编辑（多标签） ── */
 
     async openEditor(file: string) {
       if (!this.path) return
-      if (this.editorFile === file && this.editor) return
-      this.closeDiff()
-      this.editorFile = file
-      this.editor = null
-      this.editorContent = ''
-      this.editorLoading = true
+      this.activeTab = `f:${file}`
+      if (this.editorTabs.some((t) => t.file === file)) return
+      const tab: EditorTab = {
+        file,
+        content: '',
+        saved: '',
+        eol: '\n',
+        size: 0,
+        lines: 0,
+        editable: true,
+        encoding: 'utf8',
+        truncated: false,
+        loading: true,
+        saving: false,
+      }
+      this.editorTabs.push(tab)
+      const live = this.editorTabs[this.editorTabs.length - 1]
+      await this.loadEditorTab(live)
+    },
+
+    async loadEditorTab(tab: EditorTab) {
+      if (!this.path) return
+      tab.loading = true
       try {
-        const res = await api.fsRead(this.path, file)
+        const res = await api.fsRead(this.path, tab.file)
         // CodeMirror 内部统一用 LF，这里记下原文件风格，保存时还原
-        this.editorEol = res.content.includes('\r\n') ? '\r\n' : '\n'
-        this.editor = { ...res, content: res.content.replace(/\r\n/g, '\n') }
-        this.editorContent = this.editor.content
+        tab.eol = res.content.includes('\r\n') ? '\r\n' : '\n'
+        tab.content = res.content.replace(/\r\n/g, '\n')
+        tab.saved = tab.content
+        tab.size = res.size
+        tab.lines = res.lines
+        tab.editable = res.editable
+        tab.encoding = res.encoding
+        tab.truncated = res.truncated
       } catch (e) {
-        this.editor = null
-        this.editorContent = ''
         this.notify('err', String((e as Error).message || e))
       } finally {
-        this.editorLoading = false
+        tab.loading = false
       }
     },
 
-    async saveEditor(content?: string) {
-      if (!this.path || !this.editorFile || !this.editor) return
-      if (content !== undefined) this.editorContent = content
-      if (!this.editor.editable) {
+    updateEditorContent(file: string, content: string) {
+      const tab = this.editorTabs.find((t) => t.file === file)
+      if (tab) tab.content = content
+    },
+
+    async saveEditor(file?: string) {
+      if (!this.path) return
+      const tab = this.editorTabs.find((t) => t.file === (file ?? this.activeFile()))
+      if (!tab) return
+      if (!tab.editable) {
         this.notify('err', '这个文件只能只读查看（非 UTF-8 或过大）')
         return
       }
-      this.editorSaving = true
+      if (tab.content === tab.saved) {
+        this.notify('info', `${tab.file} 没有改动`)
+        return
+      }
+      tab.saving = true
       try {
         // 编辑器里是 LF，写回时还原成原文件的换行风格
-        const payload = this.editorContent.replace(/\r\n/g, '\n').split('\n').join(this.editorEol)
-        const r = await api.fsWrite(this.path, this.editorFile, payload)
-        this.editor = {
-          ...this.editor,
-          content: this.editorContent,
-          size: r.size,
-          lines: r.lines,
-          truncated: false,
-        }
+        const payload = tab.content.replace(/\r\n/g, '\n').split('\n').join(tab.eol)
+        const r = await api.fsWrite(this.path, tab.file, payload)
+        tab.saved = tab.content
+        tab.size = r.size
+        tab.lines = r.lines
+        tab.truncated = false
         this.notify('ok', `已保存 ${r.file}`)
         await this.refreshStatus()
       } catch (e) {
         this.notify('err', String((e as Error).message || e))
       } finally {
-        this.editorSaving = false
+        tab.saving = false
       }
     },
 
-    async reloadEditor() {
-      if (!this.editorFile) return
-      const file = this.editorFile
-      this.editor = null
-      this.editorFile = ''
-      await this.openEditor(file)
+    async reloadEditor(file?: string) {
+      const tab = this.editorTabs.find((t) => t.file === (file ?? this.activeFile()))
+      if (!tab) return
+      await this.loadEditorTab(tab)
+      this.notify('ok', `已重新读取 ${tab.file}`)
     },
 
-    closeEditor() {
-      this.editorFile = ''
-      this.editor = null
-      this.editorContent = ''
+    /** 当前激活编辑器对应的文件名（没有则空） */
+    activeFile(): string {
+      return this.activeTab.startsWith('f:') ? this.activeTab.slice(2) : ''
     },
 
-    /** 打开任意提交中某文件的 diff（用于文件历史跳转） */    async openFileDiffAt(oid: string, file: string) {
-      if (!this.path) return
-      this.closeEditor()
-      this.diffFile = file
-      this.diff = null
-      this.diffFrom = 0
-      this.diffKind = 'commit'
-      this.diffOid = oid
-      this.diffLoading = true
-      try {
-        this.diff = await api.fileDiff(this.path, oid, file, this.diffWindow(0))
-      } catch {
-        this.diff = null
-      } finally {
-        this.diffLoading = false
-      }
+    closeEditor(file?: string) {
+      const name = file ?? this.activeFile()
+      const idx = this.editorTabs.findIndex((t) => t.file === name)
+      const wasActive = idx >= 0 && this.activeTab === `f:${name}`
+      if (idx >= 0) this.editorTabs.splice(idx, 1)
+      if (wasActive) this.pickNextTab()
+    },
+
+    closeEditorTab(file: string) {
+      this.closeEditor(file)
     },
 
     notify(kind: Notice['kind'], text: string) {
@@ -594,6 +760,7 @@ export const useRepoStore = defineStore('repo', {
       this.statusLoading = true
       try {
         this.status = await api.worktreeStatus(this.path)
+        void this.loadBranchStatus()
       } catch (e) {
         this.status = null
         this.error = String((e as Error).message || e)
@@ -651,24 +818,51 @@ export const useRepoStore = defineStore('repo', {
       }
     },
 
-    async openWorktreeDiff(file: string, staged: boolean) {
+    /* ─────────────── 同步 ─────────────── */
+
+    async loadBranchStatus() {
       if (!this.path) return
-      this.diffFile = file
-      this.diffStaged = staged
-      this.diffKind = 'worktree'
-      this.diffFrom = 0
-      this.diff = null
-      this.diffLoading = true
       try {
-        this.diff = await api.worktreeDiff(this.path, file, staged, this.diffWindow(0))
+        this.branchStatus = (await api.branchStatus(this.path)).branches
       } catch {
-        this.diff = null
-      } finally {
-        this.diffLoading = false
+        this.branchStatus = []
       }
     },
 
-    /* ─────────────── 同步 ─────────────── */
+    async deleteRemoteBranch(name: string) {
+      if (!this.path) return
+      try {
+        await api.deleteRemoteBranch(this.path, name)
+        this.notify('ok', `已删除远端分支 ${name}`)
+        await this.loadBranchStatus()
+        this.info = await api.openRepo(this.path)
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async deleteSnapshot(ref: string) {
+      if (!this.path) return
+      try {
+        await api.deleteSnapshot(this.path, ref)
+        this.notify('ok', '已彻底删除该快照')
+        await this.loadSnapshots()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async purgeSnapshots() {
+      if (!this.path) return
+      try {
+        const r = await api.deleteAllSnapshots(this.path)
+        this.notify('ok', `已清空 ${r.count} 个安全网快照`)
+        await this.loadSnapshots()
+        await this.loadReflog()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
 
     async sync(kind: 'fetch' | 'pull' | 'push', force = false) {
       if (!this.path) return
@@ -886,6 +1080,7 @@ export const useRepoStore = defineStore('repo', {
         this.notify('ok', `已删除分支 ${name}`)
         this.info = await api.openRepo(this.path)
         await this.reload()
+        await this.loadBranchStatus()
       } catch (e) {
         this.notify('err', String((e as Error).message || e))
       }

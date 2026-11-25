@@ -15,6 +15,8 @@ import FileEditor from './components/FileEditor.vue'
 import FilePanel from './components/FilePanel.vue'
 import HealthModal from './components/HealthModal.vue'
 import ProjectSwitcher from './components/ProjectSwitcher.vue'
+import CompareList from './components/CompareList.vue'
+import HunkDialog from './components/HunkDialog.vue'
 import WorktreeDialog from './components/WorktreeDialog.vue'
 import Icon from './components/Icon.vue'
 import IconButton from './components/IconButton.vue'
@@ -66,6 +68,7 @@ const showWorktreeDialog = ref(false)
 const showDashboard = ref(false)
 const showClone = ref(false)
 const cloneUrl = ref('')
+const showHunks = ref<{ file: string; staged: boolean } | null>(null)
 const showDate = ref(false)
 const dateBtn = ref<HTMLElement | null>(null)
 const dateRoot = ref<HTMLElement | null>(null)
@@ -168,19 +171,56 @@ const identityMissing = computed(
   () => !!repo.info && !repo.identity.email && !repo.identityDismissed,
 )
 
-/** 「只看…的历史」条上显示的简短标签 */
-const tipLabel = computed(() => {
+/** 文档标签栏：编辑器 + diff 合并成一排，可横向滚动 */
+const docTabs = computed(() =>
+  [
+    ...repo.editorTabs.map((t) => ({
+      key: `f:${t.file}`,
+      kind: 'file' as const,
+      label: t.file.split('/').pop() || t.file,
+      title: t.file,
+      dirty: t.content !== t.saved,
+    })),
+    ...repo.diffTabs.map((t) => ({
+      key: `d:${t.key}`,
+      kind: 'diff' as const,
+      label: t.file.split('/').pop() || t.file,
+      title: `${t.file} · ${diffKindLabel(t.kind)}`,
+      dirty: false,
+    })),
+  ].sort((a, b) => (a.key < b.key ? -1 : 1)),
+)
+
+function diffKindLabel(kind: string) {
+  if (kind === 'worktree') return '工作区改动'
+  if (kind === 'compare') return '提交对比'
+  return '提交改动'
+}
+
+const activeEditorTab = computed(
+  () => repo.editorTabs.find((t) => repo.activeTab === `f:${t.file}`) ?? null,
+)
+const activeDiffTab = computed(
+  () => repo.diffTabs.find((t) => repo.activeTab === `d:${t.key}`) ?? null,
+)
+
+function closeTab(key: string) {
+  if (key.startsWith('d:')) repo.closeDiffTab(key.slice(2))
+  else repo.closeEditorTab(key.slice(2))
+  if (!repo.activeTab) diffFullscreen.value = false
+}
+
+function closeActiveDoc() {
+  closeTab(repo.activeTab)
+}
+
+/** 「只看…的历史」条上显示的简短标签 */const tipLabel = computed(() => {
   const t = repo.tip
   if (!t) return ''
   if (/^[0-9a-f]{7,40}$/i.test(t)) return t.slice(0, 7)
   if (t.length > 40) return `${t.slice(0, 37)}…`
   return t
 })
-
-function closeDiff() {
-  repo.closeDiff()
-  diffFullscreen.value = false
-}
 
 /* ── 面板宽度拖拽 ── */
 function startDrag(side: 'left' | 'right', e: PointerEvent) {
@@ -271,6 +311,7 @@ async function onClose() {
 
 /* ── 快捷键 ── */
 function onKey(e: KeyboardEvent) {
+  if (e.defaultPrevented) return
   const ctrl = e.ctrlKey || e.metaKey
 
   if (ctrl && e.key.toLowerCase() === 'k') {
@@ -300,17 +341,18 @@ function onKey(e: KeyboardEvent) {
     else if (showDashboard.value) showDashboard.value = false
     else if (showClone.value) showClone.value = false
     else if (showDate.value) showDate.value = false
+    else if (showHunks.value) showHunks.value = null
+    else if (repo.compareOpen) repo.closeCompare()
     else if (showWorktreeDialog.value) showWorktreeDialog.value = false
     else if (repo.commandOutput) repo.closeCommandOutput()
     else if (repo.stashDiff) repo.closeStashDiff()
-    else if (repo.editorFile) repo.closeEditor()
-    else if (repo.diffFile) closeDiff()
+    else if (repo.activeTab) closeActiveDoc()
     else if (repo.conflictFile) repo.closeConflict()
     else if (repo.tip) repo.setTip('')
     else if (repo.search) repo.search = ''
     return
   }
-  if (showPalette.value || showSettings.value || prompt.value || repo.diffFile || repo.conflictFile) return
+  if (showPalette.value || showSettings.value || prompt.value || repo.activeTab || repo.conflictFile) return
 
   if (e.key === 'ArrowDown') {
     e.preventDefault()
@@ -337,6 +379,13 @@ function onCommitContext({ row, x, y }: { row: CommitRow; x: number; y: number }
     { id: 'new-branch', label: '在此提交上新建分支…' },
     { id: 'new-tag', label: '在此提交上新建标签…' },
     { id: 'focus-here', label: '只看此提交起的历史' },
+    { id: 'divider3', label: '', divider: true },
+    { id: 'compare-base', label: '设为对比起点' },
+  )
+  if (repo.compareBase && repo.compareBase !== row.oid) {
+    items.push({ id: 'compare-with', label: `与 ${repo.compareBase.slice(0, 7)} 对比` })
+  }
+  items.push(
     { id: 'divider2', label: '', divider: true },
     { id: 'cherry-pick', label: 'Cherry-pick 到当前分支' },
     { id: 'revert', label: '撤销此提交（revert）' },
@@ -364,6 +413,10 @@ function onCommitContext({ row, x, y }: { row: CommitRow; x: number; y: number }
         openCreateTag(row.oid)
       } else if (id === 'focus-here') {
         repo.setTip(row.oid)
+      } else if (id === 'compare-base') {
+        repo.setCompareBase(row.oid)
+      } else if (id === 'compare-with') {
+        await repo.openCompare(row.oid)
       } else if (id === 'cherry-pick') {
         if (settings.confirmDangerous) {
           prompt.value = {
@@ -426,8 +479,8 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
       else if (id === 'pull') await repo.sync('pull')
       else if (id === 'push') await repo.sync('push')
       else if (id === 'copy-name') {
-        await navigator.clipboard?.writeText(ref.name)
-        repo.notify('ok', '已复制名称')
+        const ok = await copyText(ref.name)
+        repo.notify(ok ? 'ok' : 'err', ok ? '已复制名称' : '复制失败')
       } else if (id === 'rename') {
         prompt.value = {
           title: '重命名分支',
@@ -439,6 +492,13 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
       } else if (id === 'delete') {
         if (!window.confirm(`确定删除分支 ${ref.name}？\n（会先自动打安全网快照）`)) return
         await repo.deleteBranch(ref.name)
+        const hasRemote = (repo.branchStatus.find((b) => b.name === ref.name)?.upstream ?? '') !== ''
+        if (
+          hasRemote &&
+          window.confirm(`是否同时删除远端分支 ${ref.name}？\n这会执行 git push <remote> --delete ${ref.name}`)
+        ) {
+          await repo.deleteRemoteBranch(ref.name)
+        }
       } else if (id === 'delete-tag') {
         if (!window.confirm(`确定删除标签 ${ref.name}？`)) return
         await repo.deleteTag(ref.name)
@@ -778,14 +838,18 @@ onBeforeUnmount(() => {
           :branch="repo.info.branch"
           :tip="repo.tip"
           :name="repo.info.name"
+          :statuses="repo.branchStatus"
           @filter="repo.setTip($event)"
           @context="onRefContext"
           @create-tag="openCreateTag()"
+          @sync="repo.sync($event)"
+          @compare="repo.openCompare($event, 'HEAD')"
         />
         <WorkingPanel
           v-else-if="leftTab === 'working'"
           class="min-h-0 flex-1"
           @conflict="repo.openConflict($event)"
+          @hunks="showHunks = $event"
         />
         <StashPanel v-else-if="leftTab === 'stashes'" class="min-h-0 flex-1" @create="openCreateStash" />
         <WorktreePanel
@@ -802,42 +866,75 @@ onBeforeUnmount(() => {
       <div v-if="settings.showLeft" class="panel-resizer" @pointerdown="startDrag('left', $event)" />
 
       <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <!-- 文档标签：打开的文件和 diff 都在这里，可横向滚动、单个/全部关闭 -->
+        <div
+          v-if="docTabs.length"
+          class="line-b flex h-8 shrink-0 items-center gap-0.5 overflow-x-auto px-1"
+          :style="{ background: 'var(--panel)' }"
+        >
+          <div
+            v-for="t in docTabs"
+            :key="t.key"
+            class="group flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded px-2 text-[11px]"
+            :style="
+              repo.activeTab === t.key
+                ? { background: 'var(--panel-3)', color: 'var(--text)' }
+                : { color: 'var(--text-mute)' }
+            "
+            :title="t.title"
+            @click="repo.activeTab = t.key"
+          >
+            <span class="shrink-0 text-[9px] opacity-70">{{ t.kind === 'file' ? '◻' : '±' }}</span>
+            <span class="max-w-[170px] truncate">{{ t.label }}</span>
+            <span v-if="t.dirty" class="h-1.5 w-1.5 shrink-0 rounded-full" :style="{ background: 'var(--accent)' }" />
+            <button class="shrink-0 px-0.5 opacity-50 hover:opacity-100" title="关闭" @click.stop="closeTab(t.key)">
+              ✕
+            </button>
+          </div>
+          <button class="ml-auto shrink-0 px-2 text-[10px] t3 hover:opacity-100" @click="repo.closeAllDocs()">
+            全部关闭
+          </button>
+        </div>
+
         <FileEditor
-          v-if="repo.editorFile"
+          v-if="activeEditorTab"
+          :key="activeEditorTab.file"
           class="min-h-0 flex-1"
-          :file="repo.editorFile"
-          :content="repo.editorContent"
-          :dirty="repo.editorDirty"
-          :saving="repo.editorSaving"
-          :loading="repo.editorLoading"
-          :editable="repo.editor?.editable"
-          :encoding="repo.editor?.encoding"
-          :size="repo.editor?.size"
-          :lines="repo.editor?.lines"
-          :truncated="repo.editor?.truncated"
-          @change="repo.editorContent = $event"
-          @save="repo.saveEditor()"
-          @reload="repo.reloadEditor()"
-          @close="repo.closeEditor()"
+          :file="activeEditorTab.file"
+          :content="activeEditorTab.content"
+          :dirty="activeEditorTab.content !== activeEditorTab.saved"
+          :saving="activeEditorTab.saving"
+          :loading="activeEditorTab.loading"
+          :editable="activeEditorTab.editable"
+          :encoding="activeEditorTab.encoding"
+          :size="activeEditorTab.size"
+          :lines="activeEditorTab.lines"
+          :truncated="activeEditorTab.truncated"
+          @change="repo.updateEditorContent(activeEditorTab.file, $event)"
+          @save="repo.saveEditor(activeEditorTab.file)"
+          @reload="repo.reloadEditor(activeEditorTab.file)"
+          @close="closeActiveDoc()"
         />
         <div
-          v-if="!repo.editorFile && repo.diffFile"
+          v-else-if="activeDiffTab"
           :class="diffFullscreen ? 'fixed inset-0 z-40 flex' : 'flex min-h-0 flex-1'"
           :style="diffFullscreen ? { background: 'var(--bg)' } : {}"
         >
           <DiffView
+            :key="activeDiffTab.key"
             class="min-w-0 flex-1"
-            :file="repo.diffFile"
-            :diff="repo.diff"
-            :loading="repo.diffLoading"
+            :file="activeDiffTab.file"
+            :diff="activeDiffTab.diff"
+            :loading="activeDiffTab.loading"
             :fullscreen="diffFullscreen"
             :large-kb="settings.diffLargeKB"
             @toggle-fullscreen="diffFullscreen = !diffFullscreen"
             @load-more="repo.loadMoreDiff()"
-            @close="closeDiff()"
+            @close="closeActiveDoc()"
           />
         </div>
-        <div v-else-if="!repo.editorFile" class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <CompareList v-else-if="repo.compareOpen" class="min-w-0 flex-1" />
+        <div v-else class="flex min-h-0 min-w-0 flex-1 flex-col">
           <!-- cherry-pick / revert 进行中：给继续 / 跳过 / 中止 -->
           <div
             v-if="repo.sequence.inProgress"
@@ -1007,6 +1104,12 @@ onBeforeUnmount(() => {
       :initial-url="cloneUrl"
       @close="showClone = false; cloneUrl = ''"
       @cloned="openPath"
+    />
+    <HunkDialog
+      v-if="showHunks"
+      :file="showHunks.file"
+      :staged="showHunks.staged"
+      @close="showHunks = null"
     />
     <WorktreeDialog v-if="showWorktreeDialog" @close="showWorktreeDialog = false" />
     <CommandPalette

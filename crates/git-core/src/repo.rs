@@ -281,4 +281,10 @@ impl Repo {
             Err(_) => Ok(None),
         }
     }
+
+    /// 取某个提交里某个文件的原始字节（跨提交对比用）
+    pub fn blob_bytes_at(&self, rev: &str, path: &str) -> Result<Option<Vec<u8>>> {
+        let commit = self.inner.revparse_single(rev)?.peel_to_commit()?;
+        self.blob_at(&commit.tree()?, path)
+    }
 }

@@ -14,6 +14,16 @@ async function restore(ref: string) {
   await repo.restoreSnapshot(ref)
 }
 
+async function removeOne(ref: string) {
+  if (!window.confirm('彻底删除这个快照？删除后无法再用它回滚。')) return
+  await repo.deleteSnapshot(ref)
+}
+
+async function purgeAll() {
+  if (!window.confirm(`彻底删除全部 ${repo.snapshots.length} 个快照？\n只删安全网引用，不影响分支和提交。`)) return
+  await repo.purgeSnapshots()
+}
+
 async function reset(oid: string, mode: 'soft' | 'mixed' | 'hard') {
   const tips = {
     soft: '只移动 HEAD，改动全部保留在暂存区',
@@ -30,7 +40,16 @@ async function reset(oid: string, mode: 'soft' | 'mixed' | 'hard') {
     <div class="line-b flex items-center px-3 py-2">
       <span class="text-[12px] font-semibold t1">安全网</span>
       <span class="ml-2 text-[11px] t3">{{ repo.snapshots.length }} 个快照</span>
-      <button class="btn ml-auto px-2 py-0.5 text-[11px]" @click="repo.loadSnapshots(); repo.loadReflog()">刷新</button>
+      <button
+        v-if="repo.snapshots.length"
+        class="btn ml-auto px-2 py-0.5 text-[11px]"
+        style="color: #f87171"
+        title="彻底删除所有安全网快照，释放引用"
+        @click="purgeAll"
+      >
+        清空
+      </button>
+      <button class="btn ml-1 px-2 py-0.5 text-[11px]" @click="repo.loadSnapshots(); repo.loadReflog()">刷新</button>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto">
@@ -57,6 +76,14 @@ async function reset(oid: string, mode: 'soft' | 'mixed' | 'hard') {
           <div class="mt-0.5 truncate text-[11px] t3">{{ s.subject }}</div>
         </div>
         <button class="btn shrink-0 px-2 py-0.5 text-[10px]" @click="restore(s.ref)">回滚</button>
+        <button
+          class="btn shrink-0 px-1.5 py-0.5 text-[10px]"
+          style="color: #f87171"
+          title="彻底删除这个快照"
+          @click="removeOne(s.ref)"
+        >
+          删除
+        </button>
       </div>
 
       <div class="line-t mx-3 my-2" />

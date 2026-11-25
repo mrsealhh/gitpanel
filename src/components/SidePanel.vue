@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { RepoRef } from '../api/types'
+import type { BranchStatus, RepoRef } from '../api/types'
 import { buildBranchTree, filterTree, flattenTree, type FlatRow, type TreeNode } from '../lib/branchTree'
 
 const props = defineProps<{
@@ -8,13 +8,23 @@ const props = defineProps<{
   branch: string
   tip: string
   name: string
+  statuses?: BranchStatus[]
 }>()
 
 const emit = defineEmits<{
   (e: 'filter', tip: string): void
   (e: 'context', payload: { ref: RepoRef; x: number; y: number }): void
   (e: 'create-tag'): void
+  (e: 'sync', kind: 'fetch' | 'pull' | 'push'): void
+  (e: 'compare', name: string): void
 }>()
+
+/** 分支名 → 上游/领先/落后 */
+const statusMap = computed(() => {
+  const map: Record<string, BranchStatus> = {}
+  for (const s of props.statuses ?? []) map[s.name] = s
+  return map
+})
 
 const q = ref('')
 const kw = computed(() => q.value.trim().toLowerCase())
@@ -184,6 +194,25 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
           <span class="truncate" :style="row.node.ref?.name === branch ? { color: 'var(--accent)', fontWeight: 500 } : {}">
             {{ row.node.seg }}
           </span>
+
+          <!-- 领先 / 落后：其它分支也能一眼看出有没有未推送 / 未拉取 -->
+          <span
+            v-if="statusMap[row.node.ref?.name ?? '']?.ahead"
+            class="shrink-0 text-[10px]"
+            :style="{ color: 'var(--accent)' }"
+            :title="`领先上游 ${statusMap[row.node.ref?.name ?? ''].ahead} 个提交`"
+          >
+            ↑{{ statusMap[row.node.ref?.name ?? ''].ahead }}
+          </span>
+          <span
+            v-if="statusMap[row.node.ref?.name ?? '']?.behind"
+            class="shrink-0 text-[10px]"
+            :style="{ color: 'var(--badge-head-fg)' }"
+            :title="`落后上游 ${statusMap[row.node.ref?.name ?? ''].behind} 个提交`"
+          >
+            ↓{{ statusMap[row.node.ref?.name ?? ''].behind }}
+          </span>
+
           <span
             v-if="row.node.ref?.name === branch"
             class="ml-auto shrink-0 rounded px-1 text-[9px]"
@@ -191,6 +220,33 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
           >
             当前
           </span>
+          <span v-else-if="statusMap[row.node.ref?.name ?? '']" class="ml-auto flex shrink-0 items-center gap-1">
+            <button
+              class="rounded px-1 text-[9px] t3 hover:opacity-100"
+              :style="{ border: '1px solid var(--border)' }"
+              title="与当前 HEAD 对比，看这个分支有没有别的改动"
+              @click.stop="emit('compare', row.node.ref!.name)"
+            >
+              对比
+            </button>
+          </span>
+        </div>
+
+        <!-- 当前分支的远端操作，直接放在分支下面 -->
+        <div
+          v-if="row.node.ref?.name === branch && statusMap[branch]?.upstream"
+          class="flex items-center gap-1 py-[2px]"
+          :style="{ paddingLeft: `${26 + row.depth * 12}px` }"
+        >
+          <button class="rounded px-1.5 py-0 text-[9px] t3 hover:opacity-100" :style="{ border: '1px solid var(--border)' }" title="抓取远端更新" @click="emit('sync', 'fetch')">
+            抓取
+          </button>
+          <button class="rounded px-1.5 py-0 text-[9px] t3 hover:opacity-100" :style="{ border: '1px solid var(--border)' }" title="拉取并合并" @click="emit('sync', 'pull')">
+            拉取{{ statusMap[branch]?.behind ? ` ${statusMap[branch].behind}` : '' }}
+          </button>
+          <button class="rounded px-1.5 py-0 text-[9px] t3 hover:opacity-100" :style="{ border: '1px solid var(--border)' }" title="推送到远端" @click="emit('sync', 'push')">
+            推送{{ statusMap[branch]?.ahead ? ` ${statusMap[branch].ahead}` : '' }}
+          </button>
         </div>
 
       </div>

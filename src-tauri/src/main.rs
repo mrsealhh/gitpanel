@@ -40,6 +40,13 @@ fn arr(p: &Value, k: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn arr_usize(p: &Value, k: &str) -> Vec<usize> {
+    p.get(k)
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as usize)).collect())
+        .unwrap_or_default()
+}
+
 fn opt_s(p: &Value, k: &str) -> Option<String> {
     p.get(k).and_then(|v| v.as_str()).map(|v| v.to_string())
 }
@@ -118,6 +125,17 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
             repo.restore_snapshot(&s(&p, "ref"))?;
             json!({ "ok": true })
         }
+        "delete-snapshot" => {
+            repo.delete_snapshot(&s(&p, "ref"))?;
+            json!({ "ok": true })
+        }
+        "delete-all-snapshots" => json!({ "ok": true, "count": repo.delete_all_snapshots()? }),
+
+        "branch-status" => json!({ "branches": repo.branch_status()? }),
+        "delete-remote-branch" => json!({
+            "ok": true,
+            "output": repo.delete_remote_branch(&s(&p, "name"))?
+        }),
 
         "conflict" => serde_json::to_value(repo.conflict_detail(&s(&p, "file"))?)?,
         "resolve" => {
@@ -198,8 +216,33 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
         }
         "worktree-prune" => json!({ "ok": true, "output": repo.prune_worktrees()? }),
 
-        "file-history" => json!({
-            "file": s(&p, "file"),
+        /* ── hunk 级暂存 / 跨提交对比 ── */
+        "file-hunks" => serde_json::to_value(repo.file_hunks(&s(&p, "file"), b(&p, "staged"))?)?,
+        "apply-hunks" => json!({
+            "ok": true,
+            "output": repo.apply_hunks(
+                &s(&p, "file"),
+                b(&p, "staged"),
+                &arr_usize(&p, "indexes"),
+                &s(&p, "mode"),
+            )?
+        }),
+        "compare" => json!({
+            "a": s(&p, "a"),
+            "b": s(&p, "b"),
+            "files": repo.compare(&s(&p, "a"), &s(&p, "b"))?
+        }),
+        "compare-file" => {
+            let win = diff_window(&p);
+            serde_json::to_value(repo.compare_file(
+                &s(&p, "a"),
+                &s(&p, "b"),
+                &s(&p, "file"),
+                win,
+            )?)?
+        }
+
+        "file-history" => json!({            "file": s(&p, "file"),
             "commits": repo.file_history(&s(&p, "file"), n(&p, "limit", 200) as usize)?
         }),
         "blame" => {
@@ -211,7 +254,7 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
         /* ── 本地文件的查看 / 编辑（省去开别的编辑器） ── */
         "fs-list" => fs_list(repo.path(), &s(&p, "dir"))?,
         "fs-files" => repo_files(repo.path())?,
-        "fs-read" => fs_read(repo.path(), &s(&p, "file"), n(&p, "maxBytes", 2 * 1024 * 1024))?,
+        "fs-grep" => fs_grep(repo.path(), &s(&p, "query"), n(&p, "max", 300))?,        "fs-read" => fs_read(repo.path(), &s(&p, "file"), n(&p, "maxBytes", 2 * 1024 * 1024))?,
         "fs-write" => fs_write(repo.path(), &s(&p, "file"), &s(&p, "content"))?,
 
         other => return Err(anyhow!("未知命令: {other}")),
@@ -249,6 +292,47 @@ fn repo_files(root: &std::path::Path) -> Result<Value> {
     files.sort();
     files.dedup();
     Ok(json!({ "files": files }))
+}
+
+/// 在文件内容里搜索（git grep，含未跟踪文件）
+fn fs_grep(root: &std::path::Path, query: &str, max: u32) -> Result<Value> {
+    if query.trim().is_empty() {
+        return Ok(json!({ "hits": [] }));
+    }
+    let out = git_core::proc::command("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "grep",
+            "-n",
+            "-I",
+            "-F",
+            "--untracked",
+            "--no-color",
+            "-e",
+            query,
+            "--",
+            ".",
+        ])
+        .output()?;
+    // git grep 没有命中时返回码是 1
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut hits = Vec::new();
+    let limit = max.max(1) as usize;
+    for line in text.lines() {
+        if hits.len() >= limit {
+            break;
+        }
+        let Some((file, rest)) = line.split_once(':') else { continue };
+        let Some((no, content)) = rest.split_once(':') else { continue };
+        let Ok(line_no) = no.parse::<u32>() else { continue };
+        hits.push(json!({
+            "file": file.trim_start_matches("./"),
+            "line": line_no,
+            "text": content.trim_end(),
+        }));
+    }
+    Ok(json!({ "hits": hits, "limitReached": hits.len() >= limit }))
 }
 
 /// 把相对路径解析到仓库内，越界（../、绝对路径外跳）直接拒绝

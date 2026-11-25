@@ -123,6 +123,42 @@ pub struct MergeResult {
     pub conflicted: Vec<StatusFile>,
 }
 
+/// 工作区文件的一个 diff 块（hunk），支持按块暂存 / 取消暂存 / 丢弃
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffHunk {
+    pub header: String,
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+    /// 块内的行，带 +/-/空格 前缀
+    pub lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHunks {
+    pub path: String,
+    pub staged: bool,
+    /// diff --git / index / --- / +++ 这些文件级行
+    pub file_header: Vec<String>,
+    pub hunks: Vec<DiffHunk>,
+    pub is_binary: bool,
+}
+
+/// 分支的上游与领先/落后（左侧分支树用）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchStatus {
+    pub name: String,
+    pub upstream: String,
+    pub ahead: u32,
+    pub behind: u32,
+    pub current: bool,
+    pub last_commit: i64,
+}
+
 /// cherry-pick / revert 的进行中状态（冲突时需要「继续 / 跳过 / 中止」）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -192,8 +228,93 @@ fn git_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) -> Result<String> 
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-fn git_allow_fail(repo: &Path, args: &[&str]) -> Option<String> {
-    let out = crate::proc::command("git").arg("-C").arg(repo).args(args).output().ok()?;
+/// 带 stdin 的 git 调用（git apply 用）
+fn git_stdin(repo: &Path, args: &[&str], input: &str) -> Result<String> {
+    use std::io::Write;
+    let mut child = crate::proc::command("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("无法启动 git")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(input.as_bytes())?;
+    }
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        bail!("{}", if err.is_empty() { "git apply 失败".into() } else { err });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// 解析 `git diff -U3` 输出：文件头 + 各个 hunk
+fn parse_hunks(text: &str) -> (Vec<String>, Vec<DiffHunk>, bool) {
+    let mut header: Vec<String> = Vec::new();
+    let mut hunks: Vec<DiffHunk> = Vec::new();
+    let mut cur: Option<DiffHunk> = None;
+    let mut is_binary = false;
+
+    for line in text.lines() {
+        if line.starts_with("Binary files") || line.starts_with("GIT binary patch") {
+            is_binary = true;
+        }
+        if line.starts_with("@@") {
+            if let Some(h) = cur.take() {
+                hunks.push(h);
+            }
+            let (os, ol, ns, nl) = parse_hunk_header(line);
+            cur = Some(DiffHunk {
+                header: line.to_string(),
+                old_start: os,
+                old_lines: ol,
+                new_start: ns,
+                new_lines: nl,
+                lines: Vec::new(),
+            });
+        } else if let Some(h) = cur.as_mut() {
+            h.lines.push(line.to_string());
+        } else {
+            header.push(line.to_string());
+        }
+    }
+    if let Some(h) = cur {
+        hunks.push(h);
+    }
+    (header, hunks, is_binary)
+}
+
+/// `@@ -12,7 +12,8 @@` → (12, 7, 12, 8)
+fn parse_hunk_header(line: &str) -> (u32, u32, u32, u32) {
+    let mut old_start = 0;
+    let mut old_lines = 1;
+    let mut new_start = 0;
+    let mut new_lines = 1;
+    for (i, part) in line.split_whitespace().enumerate() {
+        let (sign, body) = match part.chars().next() {
+            Some('-') => ('-', &part[1..]),
+            Some('+') => ('+', &part[1..]),
+            _ => continue,
+        };
+        let mut nums = body.split(',');
+        let start: u32 = nums.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let count: u32 = nums.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+        if sign == '-' {
+            old_start = start;
+            old_lines = count;
+        } else {
+            new_start = start;
+            new_lines = count;
+        }
+        let _ = i;
+    }
+    (old_start, old_lines, new_start, new_lines)
+}
+
+fn git_allow_fail(repo: &Path, args: &[&str]) -> Option<String> {    let out = crate::proc::command("git").arg("-C").arg(repo).args(args).output().ok()?;
     if out.status.success() {
         Some(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
@@ -897,6 +1018,156 @@ impl Repo {
         Ok(entry)
     }
 
+    /* ── 分支状态（上游 / 领先 / 落后） ── */
+
+    pub fn branch_status(&self) -> Result<Vec<BranchStatus>> {
+        let fmt = "%(refname:short)%1f%(upstream:short)%1f%(upstream:track)%1f%(committerdate:unix)%1f%(HEAD)";
+        let out = git(self.path(), &["for-each-ref", &format!("--format={fmt}"), "refs/heads"])?;
+        let mut list = Vec::new();
+        for line in out.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let parts: Vec<&str> = line.split('\u{1f}').collect();
+            if parts.len() < 5 {
+                continue;
+            }
+            let track = parts[2];
+            let mut ahead = 0;
+            let mut behind = 0;
+            if let Some(inner) = track.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                for piece in inner.split(',') {
+                    let piece = piece.trim();
+                    if let Some(n) = piece.strip_prefix("ahead ") {
+                        ahead = n.parse().unwrap_or(0);
+                    } else if let Some(n) = piece.strip_prefix("behind ") {
+                        behind = n.parse().unwrap_or(0);
+                    }
+                }
+            }
+            list.push(BranchStatus {
+                name: parts[0].to_string(),
+                upstream: parts[1].to_string(),
+                ahead,
+                behind,
+                current: parts[4].trim() == "*",
+                last_commit: parts[3].parse().unwrap_or(0),
+            });
+        }
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(list)
+    }
+
+    /* ── hunk 级暂存 / 取消暂存 / 丢弃 ── */
+
+    fn raw_file_diff(&self, file: &str, staged: bool) -> Result<String> {
+        let mut args = vec!["diff", "-U3", "--no-color", "--no-ext-diff"];
+        if staged {
+            args.push("--cached");
+        }
+        args.push("--");
+        args.push(file);
+        git_allow_fail(self.path(), &args).ok_or_else(|| anyhow::anyhow!("读取 diff 失败"))
+    }
+
+    pub fn file_hunks(&self, file: &str, staged: bool) -> Result<FileHunks> {
+        let text = self.raw_file_diff(file, staged)?;
+        let (file_header, hunks, is_binary) = parse_hunks(&text);
+        Ok(FileHunks {
+            path: file.to_string(),
+            staged,
+            file_header,
+            hunks,
+            is_binary,
+        })
+    }
+
+    /// mode: stage（暂存所选） / unstage（取消暂存所选） / discard（丢弃所选）
+    pub fn apply_hunks(&self, file: &str, staged: bool, indexes: &[usize], mode: &str) -> Result<String> {
+        let text = self.raw_file_diff(file, staged)?;
+        let (file_header, hunks, _) = parse_hunks(&text);
+        if hunks.is_empty() {
+            bail!("这个文件没有可操作的 diff 块（可能是二进制或未跟踪文件）");
+        }
+        let mut patch = String::new();
+        for line in &file_header {
+            patch.push_str(line);
+            patch.push('\n');
+        }
+        let mut picked = 0;
+        for idx in indexes {
+            if let Some(h) = hunks.get(*idx) {
+                patch.push_str(&h.header);
+                patch.push('\n');
+                for l in &h.lines {
+                    patch.push_str(l);
+                    patch.push('\n');
+                }
+                picked += 1;
+            }
+        }
+        if picked == 0 {
+            bail!("没有选中任何 diff 块");
+        }
+
+        let mut args: Vec<&str> = vec!["apply", "--whitespace=nowarn"];
+        match mode {
+            "stage" => {
+                args.push("--cached");
+            }
+            "unstage" => {
+                args.push("--cached");
+                args.push("--reverse");
+            }
+            "discard" => {
+                args.push("--reverse");
+            }
+            other => bail!("未知操作：{other}"),
+        }
+        let out = git_stdin(self.path(), &args, &patch)?;
+        Ok(out.trim().to_string())
+    }
+
+    /* ── 两个提交 / 分支之间的对比 ── */
+
+    /// a..b 之间变更的文件（含状态字母）
+    pub fn compare(&self, a: &str, b: &str) -> Result<Vec<crate::model::CompareFile>> {
+        let out = git(self.path(), &["diff", "--name-status", "-z", a, b])?;
+        let mut files = Vec::new();
+        let mut it = out.split('\0').filter(|s| !s.is_empty());
+        while let Some(status) = it.next() {
+            let Some(path) = it.next() else { break };
+            // 重命名/复制会多一个原路径
+            let first = status.chars().next().unwrap_or('M');
+            if first == 'R' || first == 'C' {
+                let _ = it.next();
+            }
+            files.push(crate::model::CompareFile {
+                path: path.to_string(),
+                status: first.to_string(),
+            });
+        }
+        files.sort_by(|x, y| x.path.cmp(&y.path));
+        Ok(files)
+    }
+
+    pub fn compare_file(
+        &self,
+        a: &str,
+        b: &str,
+        file: &str,
+        win: crate::text::DiffWindow,
+    ) -> Result<crate::model::FileDiff> {
+        let old = self.blob_bytes_at(a, file)?;
+        let new = self.blob_bytes_at(b, file)?;
+        Ok(crate::text::build_file_diff(
+            file,
+            old.as_deref(),
+            new.as_deref(),
+            &win,
+        ))
+    }
+
     /* ── cherry-pick / revert ── */
 
     fn check_oid(&self, oid: &str) -> Result<String> {
@@ -1017,6 +1288,49 @@ impl Repo {
         Ok(out.trim().to_string())
     }
 
+    /// 删除分支对应的远端分支（origin/xxx）
+    pub fn delete_remote_branch(&self, name: &str) -> Result<String> {
+        if !crate::actions::valid_ref(name) {
+            bail!("非法的分支名");
+        }
+        // 有上游就用上游，没有就默认 origin
+        let upstream = git_allow_fail(
+            self.path(),
+            &["rev-parse", "--abbrev-ref", &format!("{name}@{{upstream}}")],
+        )
+        .unwrap_or_default();
+        let (remote, branch) = match upstream.trim().split_once('/') {
+            Some((r, b)) if !r.is_empty() && !b.is_empty() => (r.to_string(), b.to_string()),
+            _ => ("origin".to_string(), name.to_string()),
+        };
+        let out = git(self.path(), &["push", &remote, "--delete", &branch])?;
+        Ok(out.trim().to_string())
+    }
+
+    /// 彻底删除一个安全网快照
+    pub fn delete_snapshot(&self, reference: &str) -> Result<()> {
+        if !reference.starts_with(&format!("{SNAP_PREFIX}/")) {
+            bail!("不是安全网快照：{reference}");
+        }
+        if !crate::actions::valid_ref(reference) {
+            bail!("非法的快照引用");
+        }
+        git(self.path(), &["update-ref", "-d", reference])?;
+        Ok(())
+    }
+
+    /// 清空所有安全网快照
+    pub fn delete_all_snapshots(&self) -> Result<usize> {
+        let all = self.list_snapshots()?;
+        let mut n = 0;
+        for s in all {
+            if self.delete_snapshot(&s.r#ref).is_ok() {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
     pub fn merge_branch(&self, name: &str) -> Result<MergeResult> {
         if !crate::actions::valid_ref(name) {
             bail!("非法的分支名");
@@ -1050,8 +1364,7 @@ impl Repo {
         }
     }
 
-    pub fn delete_branch(&self, name: &str, force: bool) -> Result<Option<String>> {
-        if !crate::actions::valid_ref(name) {
+    pub fn delete_branch(&self, name: &str, force: bool) -> Result<Option<String>> {        if !crate::actions::valid_ref(name) {
             bail!("非法的分支名");
         }
         let current = git(self.path(), &["rev-parse", "--abbrev-ref", "HEAD"])?

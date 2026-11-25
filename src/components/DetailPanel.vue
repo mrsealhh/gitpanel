@@ -28,7 +28,7 @@ function statusColor(s: string) {
   <aside class="flex h-full min-h-0 w-full flex-col" :style="{ background: 'var(--panel)' }">
     <div v-if="loading" class="p-4 text-sm t3">加载提交详情…</div>
     <div v-else-if="!detail" class="p-4 text-sm t3">选择一条提交查看详情</div>
-    <div v-else class="flex min-h-0 flex-1 flex-col">
+    <div v-else class="min-h-0 flex-1 overflow-y-auto">
       <div class="line-b p-4">
         <div class="mb-2 flex items-center gap-2">
           <span class="rounded px-1.5 py-0.5 font-mono text-[11px] t3" :style="{ background: 'var(--panel-3)' }">{{ detail.short }}</span>
@@ -59,7 +59,7 @@ function statusColor(s: string) {
         </span>
       </div>
 
-      <ul class="min-h-0 flex-1 overflow-y-auto py-1">
+      <ul class="py-1">
         <li
           v-for="f in detail.files"
           :key="f.path"

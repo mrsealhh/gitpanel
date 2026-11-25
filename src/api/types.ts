@@ -94,6 +94,42 @@ export interface FileDiff {
   newBytes: number
 }
 
+/** 分支的上游与领先/落后 */
+export interface BranchStatus {
+  name: string
+  upstream: string
+  ahead: number
+  behind: number
+  current: boolean
+  lastCommit: number
+}
+
+/** 工作区文件的一个 diff 块 */
+export interface DiffHunk {
+  header: string
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: string[]
+}
+
+/** 单文件的 diff 块集合 */
+export interface FileHunks {
+  path: string
+  staged: boolean
+  fileHeader: string[]
+  hunks: DiffHunk[]
+  isBinary: boolean
+}
+
+/** 两个提交 / 分支之间对比的变更文件 */
+export interface CompareFile {
+  path: string
+  /** M / A / D / R / C */
+  status: string
+}
+
 /** cherry-pick / revert 的进行中状态 */
 export interface SequenceStatus {
   /** '' / 'cherry-pick' / 'revert' */

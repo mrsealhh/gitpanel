@@ -444,6 +444,18 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/pull') return send(res, 200, await ops.pullRepo(body.path))
     if (url.pathname === '/api/push') return send(res, 200, await ops.pushRepo(body.path, !!body.force))
     if (url.pathname === '/api/snapshots') return send(res, 200, await ops.listSnapshots(body.path))
+    if (url.pathname === '/api/delete-snapshot') {
+      return send(res, 200, await ops.deleteSnapshot(body.path, body.ref))
+    }
+    if (url.pathname === '/api/delete-all-snapshots') {
+      return send(res, 200, await ops.deleteAllSnapshots(body.path))
+    }
+    if (url.pathname === '/api/branch-status') {
+      return send(res, 200, await ops.branchStatus(body.path))
+    }
+    if (url.pathname === '/api/delete-remote-branch') {
+      return send(res, 200, await ops.deleteRemoteBranch(body.path, body.name))
+    }
     if (url.pathname === '/api/restore-snapshot') {
       return send(res, 200, await ops.restoreSnapshot(body.path, body.ref))
     }
@@ -496,6 +508,18 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/ignore-file') {
       return send(res, 200, await ops.ignoreFile(body.path, body.file))
     }
+    if (url.pathname === '/api/file-hunks') {
+      return send(res, 200, await ops.fileHunks(body.path, body.file, !!body.staged))
+    }
+    if (url.pathname === '/api/apply-hunks') {
+      return send(res, 200, await ops.applyHunks(body.path, body.file, !!body.staged, body.indexes, body.mode))
+    }
+    if (url.pathname === '/api/compare') {
+      return send(res, 200, await ops.compareCommits(body.path, body.a, body.b))
+    }
+    if (url.pathname === '/api/compare-file') {
+      return send(res, 200, await ops.compareFile(body.path, body.a, body.b, body.file, body))
+    }
 
     // ── 工作树 ──
     if (url.pathname === '/api/worktrees') return send(res, 200, await ops.listWorktrees(body.path))
@@ -525,6 +549,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/fs-files') {
       return send(res, 200, await ops.repoFiles(body.path))
+    }
+    if (url.pathname === '/api/fs-grep') {
+      return send(res, 200, await ops.fsGrep(body.path, body.query, body.max))
     }
     if (url.pathname === '/api/fs-read') {
       return send(res, 200, await ops.fsRead(body.path, body.file, body.maxBytes))

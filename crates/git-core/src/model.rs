@@ -88,6 +88,15 @@ pub struct CommitDetail {
     pub deletions: u32,
 }
 
+/// 两个提交 / 分支之间对比时的一个变更文件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareFile {
+    pub path: String,
+    /// M / A / D / R / C
+    pub status: String,
+}
+
 /// 单个文件的「父版本 / 当前版本」全文，用于并排合并视图
 ///
 /// 大文件不再一次性被截断丢弃内容，而是按「行窗口」分块返回：

@@ -1,10 +1,13 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   BlameLine,
+  BranchStatus,
   CommandResult,
   CommitDetail,
+  CompareFile,
   FileDiff,
   FileHistoryEntry,
+  FileHunks,
   FileText,
   FsEntry,
   GraphPage,
@@ -253,6 +256,58 @@ export const api = {
     return post<{ ok: boolean; entry: string }>('/api/ignore-file', { path, file })
   },
 
+  branchStatus(path: string): Promise<{ branches: BranchStatus[] }> {
+    return post<{ branches: BranchStatus[] }>('/api/branch-status', { path })
+  },
+
+  deleteRemoteBranch(path: string, name: string): Promise<{ ok: boolean; output: string }> {
+    return post<{ ok: boolean; output: string }>('/api/delete-remote-branch', { path, name })
+  },
+
+  deleteSnapshot(path: string, ref: string): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/delete-snapshot', { path, ref })
+  },
+
+  deleteAllSnapshots(path: string): Promise<{ ok: boolean; count: number }> {
+    return post<{ ok: boolean; count: number }>('/api/delete-all-snapshots', { path })
+  },
+
+  /* ── hunk 级操作 / 跨提交对比 ── */
+
+  fileHunks(path: string, file: string, staged: boolean): Promise<FileHunks> {
+    return post<FileHunks>('/api/file-hunks', { path, file, staged })
+  },
+
+  applyHunks(
+    path: string,
+    file: string,
+    staged: boolean,
+    indexes: number[],
+    mode: 'stage' | 'unstage' | 'discard',
+  ): Promise<{ ok: boolean; output: string }> {
+    return post<{ ok: boolean; output: string }>('/api/apply-hunks', {
+      path,
+      file,
+      staged,
+      indexes,
+      mode,
+    })
+  },
+
+  compare(path: string, a: string, b: string): Promise<{ a: string; b: string; files: CompareFile[] }> {
+    return post<{ a: string; b: string; files: CompareFile[] }>('/api/compare', { path, a, b })
+  },
+
+  compareFile(
+    path: string,
+    a: string,
+    b: string,
+    file: string,
+    win?: { fromLine?: number; maxLines?: number; maxBytes?: number },
+  ): Promise<FileDiff> {
+    return post<FileDiff>('/api/compare-file', { path, a, b, file, ...(win ?? {}) })
+  },
+
   /* ── 交互式 rebase ── */
   rebasePreview(path: string, base: string): Promise<{ base: string; commits: RebaseCommit[] }> {
     return post<{ base: string; commits: RebaseCommit[] }>('/api/rebase-preview', { path, base })
@@ -321,6 +376,17 @@ export const api = {
 
   fsFiles(path: string): Promise<{ files: string[] }> {
     return post<{ files: string[] }>('/api/fs-files', { path })
+  },
+
+  fsGrep(
+    path: string,
+    query: string,
+    max = 300,
+  ): Promise<{ hits: { file: string; line: number; text: string }[]; limitReached: boolean }> {
+    return post<{ hits: { file: string; line: number; text: string }[]; limitReached: boolean }>(
+      '/api/fs-grep',
+      { path, query, max },
+    )
   },
 
   fsRead(path: string, file: string, maxBytes = 2 * 1024 * 1024): Promise<FileText> {
