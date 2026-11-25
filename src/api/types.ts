@@ -94,6 +94,15 @@ export interface FileDiff {
   newBytes: number
 }
 
+/** cherry-pick / revert 的进行中状态 */
+export interface SequenceStatus {
+  /** '' / 'cherry-pick' / 'revert' */
+  kind: string
+  inProgress: boolean
+  conflicted: StatusFile[]
+  pending: number
+}
+
 /** 项目内的一个文件 / 目录（文件面板用） */
 export interface FsEntry {
   name: string

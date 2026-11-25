@@ -23,6 +23,7 @@ import type {
   RepoHealth,
   RepoInfo,
   RepoOverview,
+  SequenceStatus,
   Snapshot,
   Stash,
   StashDiff,
@@ -123,6 +124,9 @@ export const useRepoStore = defineStore('repo', {
     reflog: [] as ReflogEntry[],
     reflogLoading: false,
 
+    // cherry-pick / revert 进行中状态
+    sequence: { kind: '', inProgress: false, conflicted: [], pending: 0 } as SequenceStatus,
+
     // 交互式 rebase
     rebaseOpen: false,
     rebaseBase: 'HEAD~5',
@@ -193,6 +197,7 @@ export const useRepoStore = defineStore('repo', {
         await this.reload()
         this.loadExtras()
         await this.refreshRebaseStatus()
+        void this.loadSequence()
         const first = this.rows[0]
         if (first) await this.select(first)
         // 新项目：检查本机是否有 git 身份（只看不改，不保存）
@@ -320,8 +325,76 @@ export const useRepoStore = defineStore('repo', {
       void this.select(list[next])
     },
 
-    async setTip(tip: string) {
-      this.tip = tip
+    /* ── cherry-pick / revert ── */
+
+    async ignoreFile(file: string) {
+      if (!this.path) return
+      try {
+        const r = await api.ignoreFile(this.path, file)
+        this.notify('ok', `已加入 .gitignore：${r.entry}`)
+        await this.refreshStatus()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async loadSequence() {      if (!this.path) return
+      try {
+        this.sequence = await api.sequenceStatus(this.path)
+      } catch {
+        this.sequence = { kind: '', inProgress: false, conflicted: [], pending: 0 }
+      }
+    },
+
+    async cherryPick(oid: string) {
+      if (!this.path) return
+      try {
+        const r = await api.cherryPick(this.path, oid)
+        if (r.ok) this.notify('ok', `已 cherry-pick ${oid.slice(0, 7)}`)
+        else if (r.conflicts) this.notify('err', '有冲突，解决后点「继续」')
+        else this.notify('err', r.output || 'cherry-pick 失败')
+        await this.refreshStatus()
+        await this.loadSequence()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async revertCommit(oid: string) {
+      if (!this.path) return
+      try {
+        const r = await api.revert(this.path, oid)
+        if (r.ok) this.notify('ok', `已生成反向提交（revert ${oid.slice(0, 7)}）`)
+        else if (r.conflicts) this.notify('err', '有冲突，解决后点「继续」')
+        else this.notify('err', r.output || 'revert 失败')
+        await this.refreshStatus()
+        await this.loadSequence()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async sequenceAction(action: 'continue' | 'skip' | 'abort') {
+      if (!this.path || !this.sequence.kind) return
+      try {
+        await api.sequenceAction(
+          this.path,
+          this.sequence.kind as 'cherry-pick' | 'revert',
+          action,
+        )
+        const label = action === 'continue' ? '继续完成' : action === 'skip' ? '已跳过' : '已中止'
+        this.notify('ok', `${this.sequence.kind} ${label}`)
+        await this.refreshStatus()
+        await this.loadSequence()
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async setTip(tip: string) {      this.tip = tip
       await this.reload()
     },
 

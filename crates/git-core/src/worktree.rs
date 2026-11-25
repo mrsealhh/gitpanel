@@ -115,11 +115,24 @@ pub struct ReflogEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MergeResult {    pub ok: bool,
+pub struct MergeResult {
+    pub ok: bool,
     pub conflicts: bool,
     pub output: String,
     pub snapshot: Option<String>,
     pub conflicted: Vec<StatusFile>,
+}
+
+/// cherry-pick / revert 的进行中状态（冲突时需要「继续 / 跳过 / 中止」）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceStatus {
+    /// "" / "cherry-pick" / "revert"
+    pub kind: String,
+    pub in_progress: bool,
+    pub conflicted: Vec<StatusFile>,
+    /// 还剩多少个提交要处理（cherry-pick 多个时才有意义）
+    pub pending: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,12 +174,17 @@ pub struct RebaseStatus {
 }
 
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
-    let out = crate::proc::command("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .context("无法启动 git")?;
+    git_env(repo, args, &[])
+}
+
+/// 带环境变量的 git 调用（例如 --continue 时把 GIT_EDITOR 指到 true）
+fn git_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) -> Result<String> {
+    let mut cmd = crate::proc::command("git");
+    cmd.arg("-C").arg(repo).args(args);
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().context("无法启动 git")?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         bail!("{}", if err.is_empty() { "git 执行失败".into() } else { err });
@@ -815,13 +833,188 @@ impl Repo {
         Ok(git(self.path(), &["pull", "--no-rebase", "--autostash"])?.trim().to_string())
     }
 
+    /// 推送：分支还没有上游时自动 `--set-upstream` 到 origin（或第一个远端），
+    /// 避免「no upstream branch」这种新手常见报错。
     pub fn push(&self, force: bool) -> Result<String> {
-        let args: Vec<&str> = if force {
-            vec!["push", "--force-with-lease"]
+        let branch = git(self.path(), &["rev-parse", "--abbrev-ref", "HEAD"])?
+            .trim()
+            .to_string();
+        if branch == "HEAD" {
+            bail!("当前处于分离头指针状态，请先切到一个分支");
+        }
+        let upstream = git_allow_fail(
+            self.path(),
+            &["rev-parse", "--abbrev-ref", &format!("{branch}@{{upstream}}")],
+        );
+        let has_upstream = upstream.map(|u| !u.trim().is_empty()).unwrap_or(false);
+
+        let mut args: Vec<String> = vec!["push".to_string()];
+        if force {
+            args.push("--force-with-lease".to_string());
+        }
+        if !has_upstream {
+            let remote = git_allow_fail(self.path(), &["remote"])
+                .unwrap_or_default()
+                .lines()
+                .map(|l| l.trim().to_string())
+                .find(|l| l == "origin")
+                .or_else(|| {
+                    git_allow_fail(self.path(), &["remote"])
+                        .unwrap_or_default()
+                        .lines()
+                        .map(|l| l.trim().to_string())
+                        .find(|l| !l.is_empty())
+                });
+            let Some(remote) = remote else {
+                bail!("这个仓库没有配置远端，先添加一个 remote 再推送");
+            };
+            args.push("--set-upstream".to_string());
+            args.push(remote);
+            args.push(branch);
+        }
+        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        Ok(git(self.path(), &refs)?.trim().to_string())
+    }
+
+    /// 把文件加入 .gitignore（忽略单个文件）
+    pub fn ignore_file(&self, file: &str) -> Result<String> {
+        let rel = file.replace('\\', "/");
+        if rel.trim().is_empty() {
+            bail!("缺少文件路径");
+        }
+        let gi = self.path().join(".gitignore");
+        let mut content = fs::read_to_string(&gi).unwrap_or_default();
+        let entry = format!("/{rel}");
+        if content.lines().any(|l| l.trim() == entry) {
+            return Ok(entry);
+        }
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(&entry);
+        content.push('\n');
+        fs::write(&gi, content)?;
+        Ok(entry)
+    }
+
+    /* ── cherry-pick / revert ── */
+
+    fn check_oid(&self, oid: &str) -> Result<String> {
+        let ok = !oid.is_empty()
+            && oid.len() <= 40
+            && oid.len() >= 4
+            && oid.chars().all(|c| c.is_ascii_hexdigit());
+        if !ok {
+            bail!("非法的提交：{oid}");
+        }
+        Ok(oid.to_string())
+    }
+
+    /// 把某个提交摘到当前分支（冲突时留在冲突态，走 sequence_action）
+    pub fn cherry_pick(&self, oid: &str) -> Result<MergeResult> {
+        let oid = self.check_oid(oid)?;
+        let snapshot = self.create_snapshot("before-cherry-pick")?;
+        match git(self.path(), &["cherry-pick", &oid]) {
+            Ok(out) => Ok(MergeResult {
+                ok: true,
+                conflicts: false,
+                output: out.trim().to_string(),
+                snapshot,
+                conflicted: Vec::new(),
+            }),
+            Err(e) => {
+                let st = self.worktree_status()?;
+                Ok(MergeResult {
+                    ok: false,
+                    conflicts: !st.conflicted.is_empty(),
+                    output: e.to_string(),
+                    snapshot,
+                    conflicted: st.conflicted,
+                })
+            }
+        }
+    }
+
+    /// 撤销某个提交（生成一个反向提交）
+    pub fn revert_commit(&self, oid: &str) -> Result<MergeResult> {
+        let oid = self.check_oid(oid)?;
+        let snapshot = self.create_snapshot("before-revert")?;
+        match git(self.path(), &["revert", "--no-edit", &oid]) {
+            Ok(out) => Ok(MergeResult {
+                ok: true,
+                conflicts: false,
+                output: out.trim().to_string(),
+                snapshot,
+                conflicted: Vec::new(),
+            }),
+            Err(e) => {
+                let st = self.worktree_status()?;
+                Ok(MergeResult {
+                    ok: false,
+                    conflicts: !st.conflicted.is_empty(),
+                    output: e.to_string(),
+                    snapshot,
+                    conflicted: st.conflicted,
+                })
+            }
+        }
+    }
+
+    fn git_dir(&self) -> Option<std::path::PathBuf> {
+        let out = git_allow_fail(self.path(), &["rev-parse", "--git-dir"])?;
+        let p = std::path::PathBuf::from(out.trim());
+        Some(if p.is_absolute() { p } else { self.path().join(p) })
+    }
+
+    /// cherry-pick / revert 是否在进行中
+    pub fn sequence_status(&self) -> Result<SequenceStatus> {
+        let st = self.worktree_status()?;
+        let dir = self.git_dir();
+        let has = |name: &str| dir.as_ref().map(|d| d.join(name).exists()).unwrap_or(false);
+        let kind = if has("CHERRY_PICK_HEAD") || has("sequencer") {
+            "cherry-pick"
+        } else if has("REVERT_HEAD") {
+            "revert"
         } else {
-            vec!["push"]
+            ""
         };
-        Ok(git(self.path(), &args)?.trim().to_string())
+        let pending = dir
+            .as_ref()
+            .and_then(|d| std::fs::read_to_string(d.join("sequencer").join("todo")).ok())
+            .map(|t| {
+                t.lines()
+                    .filter(|l| {
+                        let l = l.trim();
+                        !l.is_empty() && !l.starts_with('#')
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        Ok(SequenceStatus {
+            kind: kind.to_string(),
+            in_progress: !kind.is_empty(),
+            conflicted: st.conflicted,
+            pending,
+        })
+    }
+
+    /// continue / skip / abort（kind: cherry-pick | revert）
+    pub fn sequence_action(&self, kind: &str, action: &str) -> Result<String> {
+        let kind = match kind {
+            "cherry-pick" | "revert" => kind,
+            _ => bail!("未知的序列操作：{kind}"),
+        };
+        let action = match action {
+            "continue" | "skip" | "abort" => action,
+            _ => bail!("未知动作：{action}"),
+        };
+        // --continue 会打开编辑器写提交信息，这里用 true 直接接受默认信息
+        let out = git_env(
+            self.path(),
+            &[kind, &format!("--{action}")],
+            &[("GIT_EDITOR", "true")],
+        )?;
+        Ok(out.trim().to_string())
     }
 
     pub fn merge_branch(&self, name: &str) -> Result<MergeResult> {

@@ -255,6 +255,35 @@ fn tool_list(read_only: bool) -> Vec<Value> {
                 "content": p("新的完整文件内容", "string")
             }, "required": ["path", "file", "content"] }
         }),
+        json!({
+            "name": "cherry_pick",
+            "description": "把某个提交摘到当前分支（有冲突时返回 conflicted，配合 sequence_action 继续/跳过/中止）",
+            "inputSchema": { "type": "object", "properties": {
+                "path": p("仓库路径", "string"), "oid": p("提交 SHA", "string")
+            }, "required": ["path", "oid"] }
+        }),
+        json!({
+            "name": "revert_commit",
+            "description": "撤销某个提交（生成反向提交）",
+            "inputSchema": { "type": "object", "properties": {
+                "path": p("仓库路径", "string"), "oid": p("提交 SHA", "string")
+            }, "required": ["path", "oid"] }
+        }),
+        json!({
+            "name": "sequence_action",
+            "description": "处理进行中的 cherry-pick / revert：continue / skip / abort",
+            "inputSchema": { "type": "object", "properties": {
+                "path": p("仓库路径", "string"), "kind": p("cherry-pick | revert", "string"),
+                "action": p("continue | skip | abort", "string")
+            }, "required": ["path", "kind", "action"] }
+        }),
+        json!({
+            "name": "ignore_file",
+            "description": "把文件加入 .gitignore",
+            "inputSchema": { "type": "object", "properties": {
+                "path": p("仓库路径", "string"), "file": p("相对仓库根的文件路径", "string")
+            }, "required": ["path", "file"] }
+        }),
     ]);
 
     tools
@@ -490,6 +519,13 @@ fn call_tool(name: &str, args: &Value, read_only: bool) -> anyhow::Result<Value>
             tool_read_file(&repo, &arg_str(args, "file"), max)?
         }
         "write_file" => tool_write_file(&repo, &arg_str(args, "file"), &arg_str(args, "content"))?,
+        "cherry_pick" => serde_json::to_value(repo.cherry_pick(&arg_str(args, "oid"))?)?,
+        "revert_commit" => serde_json::to_value(repo.revert_commit(&arg_str(args, "oid"))?)?,
+        "sequence_action" => json!({
+            "ok": true,
+            "output": repo.sequence_action(&arg_str(args, "kind"), &arg_str(args, "action"))?
+        }),
+        "ignore_file" => json!({ "entry": repo.ignore_file(&arg_str(args, "file"))? }),
 
         other => anyhow::bail!("未知工具: {other}"),
     })

@@ -160,6 +160,16 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
             json!({ "ok": true, "snapshot": snapshot })
         }
 
+        "cherry-pick" => serde_json::to_value(repo.cherry_pick(&s(&p, "oid"))?)?,
+        "revert" => serde_json::to_value(repo.revert_commit(&s(&p, "oid"))?)?,
+        "sequence-status" => serde_json::to_value(repo.sequence_status()?)?,
+        "sequence-action" => json!({
+            "ok": true,
+            "output": repo.sequence_action(&s(&p, "kind"), &s(&p, "action"))?
+        }),
+
+        "ignore-file" => json!({ "ok": true, "entry": repo.ignore_file(&s(&p, "file"))? }),
+
         "rebase-preview" => {
             let base = s(&p, "base");
             json!({ "base": base, "commits": repo.rebase_preview(&base)? })
@@ -367,8 +377,14 @@ fn fs_write(root: &std::path::Path, file: &str, content: &str) -> Result<Value> 
     }))
 }
 
-/* ───────────────────────── 最近打开（SQLite） ───────────────────────── */
+/// 写系统剪贴板（WebView 里 navigator.clipboard 可能没权限，用这个兜底）
+#[tauri::command]
+fn copy_text(text: String) -> Result<(), String> {
+    let mut board = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    board.set_text(text).map_err(|e| e.to_string())
+}
 
+/* ───────────────────────── 最近打开（SQLite） ───────────────────────── */
 struct Db(Mutex<Connection>);
 
 #[derive(Serialize)]
@@ -851,7 +867,7 @@ fn main() {
             recent_touch,
             recent_remove,
             recent_pin,
-            worktree_meta_list,
+            copy_text,            worktree_meta_list,
             worktree_meta_set,
             worktree_meta_touch,
             repos_overview,

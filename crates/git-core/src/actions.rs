@@ -17,6 +17,15 @@ pub fn valid_ref(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
 }
 
+/// origin/feat/x → Some("feat/x")（用于把远端分支检出成本地跟踪分支）
+fn tracking_local_name(refname: &str) -> Option<String> {
+    let (remote, rest) = refname.split_once('/')?;
+    if rest.is_empty() || rest == "HEAD" || remote.is_empty() {
+        return None;
+    }
+    Some(rest.to_string())
+}
+
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
     let out = crate::proc::command("git")
         .arg("-C")
@@ -157,6 +166,22 @@ impl Repo {
         if !valid_ref(refname) {
             bail!("非法的引用名");
         }
+
+        // 远端分支（origin/feat/x）：自动建一个同名本地分支并跟踪它，
+        // 而不是进入 detached HEAD。
+        if let Some(local) = tracking_local_name(refname) {
+            let remote_ref = format!("refs/remotes/{refname}");
+            if git(self.path(), &["rev-parse", "--verify", "--quiet", &remote_ref]).is_ok() {
+                let local_ref = format!("refs/heads/{local}");
+                if git(self.path(), &["rev-parse", "--verify", "--quiet", &local_ref]).is_ok() {
+                    git(self.path(), &["checkout", &local])?;
+                } else {
+                    git(self.path(), &["checkout", "-b", &local, "--track", refname])?;
+                }
+                return self.head_outcome();
+            }
+        }
+
         git(self.path(), &["checkout", refname])?;
         self.head_outcome()
     }

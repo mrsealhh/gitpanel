@@ -5,11 +5,45 @@ import type { Density, ThemeId } from '../stores/settings'
 import { APP_VERSION, REPO_URL } from '../api/update'
 import { isTauri, openExternal } from '../api/desktop'
 import { useUpdateStore } from '../stores/update'
+import { useRepoStore } from '../stores/repo'
+import { copyText } from '../lib/clipboard'
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const settings = useSettingsStore()
 const update = useUpdateStore()
+const repo = useRepoStore()
+
+/** 统一的设置反馈：改完立刻告诉用户生效了 */
+function toast(text: string, kind: 'ok' | 'info' | 'err' = 'ok') {
+  repo.notify(kind, text)
+}
+
+function applyTheme(id: ThemeId) {
+  settings.setTheme(id)
+  toast(`主题已切换：${THEME_LABELS[id]}`)
+}
+
+function applyDensity(id: Density) {
+  settings.density = id
+  settings.save()
+  toast(`列表密度：${DENSITY_LABELS[id]}`)
+}
+
+function saveToggle(label: string, on: boolean) {
+  settings.save()
+  toast(`${label}：${on ? '已开启' : '已关闭'}`)
+}
+
+function saveNumber(label: string) {
+  settings.save()
+  toast(`${label}已保存`)
+}
+
+function resetAll() {
+  settings.reset()
+  toast('已恢复默认设置')
+}
 
 const themes = computed(() =>
   (Object.keys(THEME_LABELS) as ThemeId[]).map((id) => ({
@@ -45,7 +79,10 @@ const MCP_SNIPPET = `{
 }`
 
 function copyMcpConfig() {
-  void navigator.clipboard?.writeText(MCP_SNIPPET)
+  void copyText(MCP_SNIPPET).then((ok) => {
+    if (ok) toast('MCP 配置已复制到剪贴板，粘贴到客户端的 mcpServers 里即可')
+    else toast('复制失败：请手动选中下面这段配置复制', 'err')
+  })
 }
 
 const updateStatus = computed(() => {  switch (update.phase) {
@@ -87,7 +124,7 @@ const updateStatus = computed(() => {  switch (update.phase) {
                 borderColor: t.active ? 'var(--accent)' : 'var(--border)',
                 background: t.active ? 'var(--accent-weak)' : 'transparent',
               }"
-              @click="settings.setTheme(t.id)"
+              @click="applyTheme(t.id)"
             >
               <span
                 class="h-6 w-6 shrink-0 rounded-full border"
@@ -110,7 +147,7 @@ const updateStatus = computed(() => {  switch (update.phase) {
               :key="d.id"
               class="btn"
               :style="d.active ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}"
-              @click="settings.density = d.id; settings.save()"
+              @click="applyDensity(d.id)"
             >
               {{ d.label }}
             </button>
@@ -121,15 +158,15 @@ const updateStatus = computed(() => {  switch (update.phase) {
           <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">显示</h3>
           <label class="flex cursor-pointer items-center justify-between py-1.5">
             <span class="text-[12px] t2">显示分支图</span>
-            <input type="checkbox" v-model="settings.showGraph" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
+            <input type="checkbox" v-model="settings.showGraph" class="h-4 w-4 accent-[var(--accent)]" @change="saveToggle('显示分支图', settings.showGraph)" />
           </label>
           <label class="flex cursor-pointer items-center justify-between py-1.5">
             <span class="text-[12px] t2">相对时间（15 hours ago）</span>
-            <input type="checkbox" v-model="settings.relativeTime" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
+            <input type="checkbox" v-model="settings.relativeTime" class="h-4 w-4 accent-[var(--accent)]" @change="saveToggle('相对时间', settings.relativeTime)" />
           </label>
           <label class="flex cursor-pointer items-center justify-between py-1.5">
             <span class="text-[12px] t2">危险操作需二次确认</span>
-            <input type="checkbox" v-model="settings.confirmDangerous" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
+            <input type="checkbox" v-model="settings.confirmDangerous" class="h-4 w-4 accent-[var(--accent)]" @change="saveToggle('危险操作二次确认', settings.confirmDangerous)" />
           </label>
         </section>
 
@@ -144,7 +181,7 @@ const updateStatus = computed(() => {  switch (update.phase) {
                 min="0"
                 step="500"
                 class="field w-[96px] px-2 py-1 text-right text-[12px]"
-                @change="settings.save()"
+                @change="saveNumber('单次最多显示行数')"
               />
               <span class="text-[11px] t3">行</span>
             </div>
@@ -158,7 +195,7 @@ const updateStatus = computed(() => {  switch (update.phase) {
                 min="0"
                 step="128"
                 class="field w-[96px] px-2 py-1 text-right text-[12px]"
-                @change="settings.save()"
+                @change="saveNumber('大文件阈值')"
               />
               <span class="text-[11px] t3">KB</span>
             </div>
@@ -172,7 +209,7 @@ const updateStatus = computed(() => {  switch (update.phase) {
           <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">窗口行为</h3>
           <label class="flex cursor-pointer items-center justify-between py-1.5">
             <span class="text-[12px] t2">最小化时收进系统托盘</span>
-            <input type="checkbox" v-model="settings.minimizeToTray" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
+            <input type="checkbox" v-model="settings.minimizeToTray" class="h-4 w-4 accent-[var(--accent)]" @change="saveToggle('最小化到托盘', settings.minimizeToTray)" />
           </label>
           <div class="flex items-center justify-between py-1.5">
             <span class="text-[12px] t2">点击关闭按钮</span>
@@ -180,14 +217,14 @@ const updateStatus = computed(() => {  switch (update.phase) {
               <button
                 class="btn"
                 :style="settings.closeAction === 'tray' ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}"
-                @click="settings.closeAction = 'tray'; settings.save()"
+                @click="settings.closeAction = 'tray'; settings.save(); toast('关闭按钮：收进托盘')"
               >
                 收进托盘
               </button>
               <button
                 class="btn"
                 :style="settings.closeAction === 'exit' ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}"
-                @click="settings.closeAction = 'exit'; settings.save()"
+                @click="settings.closeAction = 'exit'; settings.save(); toast('关闭按钮：直接退出')"
               >
                 直接退出
               </button>
@@ -199,11 +236,11 @@ const updateStatus = computed(() => {  switch (update.phase) {
           <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">更新</h3>
           <label class="flex cursor-pointer items-center justify-between py-1.5">
             <span class="text-[12px] t2">启动时自动检查更新</span>
-            <input type="checkbox" v-model="settings.autoCheckUpdate" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
+            <input type="checkbox" v-model="settings.autoCheckUpdate" class="h-4 w-4 accent-[var(--accent)]" @change="saveToggle('启动自动检查更新', settings.autoCheckUpdate)" />
           </label>
           <label class="flex cursor-pointer items-center justify-between py-1.5">
             <span class="text-[12px] t2">发现更新后自动下载安装（静默更新）</span>
-            <input type="checkbox" v-model="settings.autoInstallUpdate" class="h-4 w-4 accent-[var(--accent)]" @change="settings.save()" />
+            <input type="checkbox" v-model="settings.autoInstallUpdate" class="h-4 w-4 accent-[var(--accent)]" @change="saveToggle('静默自动安装', settings.autoInstallUpdate)" />
           </label>
           <div class="mt-2 flex flex-wrap items-center gap-2">
             <button class="btn" :disabled="update.busy" @click="update.check()">
@@ -269,7 +306,7 @@ const updateStatus = computed(() => {  switch (update.phase) {
 
       <footer class="line-t flex items-center px-5 py-3">
         <span class="text-[11px] t3">设置保存在本地，随主题即时生效</span>
-        <button class="btn ml-auto" @click="settings.reset()">恢复默认</button>
+        <button class="btn ml-auto" @click="resetAll()">恢复默认</button>
       </footer>
     </div>
   </div>

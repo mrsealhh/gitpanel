@@ -1177,3 +1177,102 @@ export async function resetTo(repo, oid, mode) {
   await makeGit(repo)(['reset', `--${mode}`, oid])
   return { ok: true, snapshot: snap }
 }
+
+/* ────────────────── cherry-pick / revert ────────────────── */
+
+async function sequenceResult(repo, output, snapshot) {
+  return {
+    ok: true,
+    conflicts: false,
+    output: String(output || '').trim(),
+    snapshot,
+    conflicted: [],
+  }
+}
+
+export async function cherryPick(repo, oid) {
+  if (!/^[0-9a-f]{4,40}$/i.test(oid)) throw new Error('非法的提交')
+  const snap = await createSnapshot(repo, 'before-cherry-pick')
+  const git = makeGit(repo)
+  try {
+    const out = await git(['cherry-pick', oid])
+    return await sequenceResult(repo, out, snap)
+  } catch (e) {
+    const st = await worktreeStatus(repo)
+    return {
+      ok: false,
+      conflicts: st.conflicted.length > 0,
+      output: String(e.message || e),
+      snapshot: snap,
+      conflicted: st.conflicted,
+    }
+  }
+}
+
+export async function revertCommit(repo, oid) {
+  if (!/^[0-9a-f]{4,40}$/i.test(oid)) throw new Error('非法的提交')
+  const snap = await createSnapshot(repo, 'before-revert')
+  const git = makeGit(repo)
+  try {
+    const out = await git(['revert', '--no-edit', oid])
+    return await sequenceResult(repo, out, snap)
+  } catch (e) {
+    const st = await worktreeStatus(repo)
+    return {
+      ok: false,
+      conflicts: st.conflicted.length > 0,
+      output: String(e.message || e),
+      snapshot: snap,
+      conflicted: st.conflicted,
+    }
+  }
+}
+
+export async function sequenceStatus(repo) {
+  const st = await worktreeStatus(repo)
+  const git = makeGit(repo)
+  let kind = ''
+  try {
+    const dir = (await git(['rev-parse', '--git-dir'])).trim()
+    const abs = path.isAbsolute(dir) ? dir : path.join(repo, dir)
+    const has = (n) => fs.existsSync(path.join(abs, n))
+    if (has('CHERRY_PICK_HEAD') || has('sequencer')) kind = 'cherry-pick'
+    else if (has('REVERT_HEAD')) kind = 'revert'
+    let pending = 0
+    try {
+      const todo = fs.readFileSync(path.join(abs, 'sequencer', 'todo'), 'utf8')
+      pending = todo.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#')).length
+    } catch {
+      pending = 0
+    }
+    return { kind, inProgress: !!kind, conflicted: st.conflicted, pending }
+  } catch {
+    return { kind: '', inProgress: false, conflicted: st.conflicted, pending: 0 }
+  }
+}
+
+/* 把文件加入 .gitignore */
+export async function ignoreFile(repo, file) {
+  const rel = String(file || '').replace(/\\/g, '/')
+  if (!rel.trim()) throw new Error('缺少文件路径')
+  const gi = path.join(repo, '.gitignore')
+  let content = ''
+  try {
+    content = fs.readFileSync(gi, 'utf8')
+  } catch {
+    content = ''
+  }
+  const entry = `/${rel}`
+  if (content.split('\n').some((l) => l.trim() === entry)) return { ok: true, entry }
+  if (content && !content.endsWith('\n')) content += '\n'
+  content += entry + '\n'
+  fs.writeFileSync(gi, content, 'utf8')
+  return { ok: true, entry }
+}
+
+export async function sequenceAction(repo, kind, action) {  if (!['cherry-pick', 'revert'].includes(kind)) throw new Error(`未知的序列操作：${kind}`)
+  if (!['continue', 'skip', 'abort'].includes(action)) throw new Error(`未知动作：${action}`)
+  const git = makeGit(repo)
+  const out = await git([kind, `--${action}`], { env: { ...process.env, GIT_EDITOR: 'true' } })
+  return { ok: true, output: String(out || '').trim() }
+}

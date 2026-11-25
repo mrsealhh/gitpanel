@@ -44,6 +44,7 @@ import {
 } from './api/desktop'
 import type { ResizeDir } from './api/desktop'
 import { APP_VERSION, REPO_URL } from './api/update'
+import { copyText } from './lib/clipboard'
 import { useRepoStore } from './stores/repo'
 import { useSettingsStore } from './stores/settings'
 import { useUpdateStore } from './stores/update'
@@ -166,6 +167,15 @@ function onRenameProject(path: string) {
 const identityMissing = computed(
   () => !!repo.info && !repo.identity.email && !repo.identityDismissed,
 )
+
+/** 「只看…的历史」条上显示的简短标签 */
+const tipLabel = computed(() => {
+  const t = repo.tip
+  if (!t) return ''
+  if (/^[0-9a-f]{7,40}$/i.test(t)) return t.slice(0, 7)
+  if (t.length > 40) return `${t.slice(0, 37)}…`
+  return t
+})
 
 function closeDiff() {
   repo.closeDiff()
@@ -296,6 +306,7 @@ function onKey(e: KeyboardEvent) {
     else if (repo.editorFile) repo.closeEditor()
     else if (repo.diffFile) closeDiff()
     else if (repo.conflictFile) repo.closeConflict()
+    else if (repo.tip) repo.setTip('')
     else if (repo.search) repo.search = ''
     return
   }
@@ -326,6 +337,9 @@ function onCommitContext({ row, x, y }: { row: CommitRow; x: number; y: number }
     { id: 'new-branch', label: '在此提交上新建分支…' },
     { id: 'new-tag', label: '在此提交上新建标签…' },
     { id: 'focus-here', label: '只看此提交起的历史' },
+    { id: 'divider2', label: '', divider: true },
+    { id: 'cherry-pick', label: 'Cherry-pick 到当前分支' },
+    { id: 'revert', label: '撤销此提交（revert）' },
   )
 
   menu.value = {
@@ -334,11 +348,11 @@ function onCommitContext({ row, x, y }: { row: CommitRow; x: number; y: number }
     items,
     handler: async (id) => {
       if (id === 'copy-sha') {
-        await navigator.clipboard?.writeText(row.oid)
-        repo.notify('ok', '已复制 SHA')
+        const ok = await copyText(row.oid)
+        repo.notify(ok ? 'ok' : 'err', ok ? '已复制 SHA' : '复制失败')
       } else if (id === 'copy-summary') {
-        await navigator.clipboard?.writeText(row.summary)
-        repo.notify('ok', '已复制提交说明')
+        const ok = await copyText(row.summary)
+        repo.notify(ok ? 'ok' : 'err', ok ? '已复制提交说明' : '复制失败')
       } else if (id === 'open-file') {
         if (repo.detail?.files.length) repo.openFileDiff(repo.detail.files[0].path)
         else repo.notify('info', '该提交没有文件变更')
@@ -350,6 +364,28 @@ function onCommitContext({ row, x, y }: { row: CommitRow; x: number; y: number }
         openCreateTag(row.oid)
       } else if (id === 'focus-here') {
         repo.setTip(row.oid)
+      } else if (id === 'cherry-pick') {
+        if (settings.confirmDangerous) {
+          prompt.value = {
+            title: 'Cherry-pick 到当前分支',
+            label: `把 ${row.short}「${row.summary}」摘到当前分支？`,
+            confirmText: '开始 cherry-pick',
+            onSubmit: () => repo.cherryPick(row.oid),
+          }
+        } else {
+          void repo.cherryPick(row.oid)
+        }
+      } else if (id === 'revert') {
+        if (settings.confirmDangerous) {
+          prompt.value = {
+            title: '撤销此提交（revert）',
+            label: `会生成一个反向提交，抵消 ${row.short} 的改动`,
+            confirmText: '生成反向提交',
+            onSubmit: () => repo.revertCommit(row.oid),
+          }
+        } else {
+          void repo.revertCommit(row.oid)
+        }
       }
     },
   }
@@ -422,14 +458,17 @@ function onFileContext({ file, x, y }: { file: string; x: number; y: number }) {
       { id: 'blame', label: 'Blame（逐行归属）' },
       { id: 'divider', label: '', divider: true },
       { id: 'copy', label: '复制路径' },
+      { id: 'ignore', label: '忽略此文件（加入 .gitignore）' },
     ],
     handler: async (id) => {
       if (id === 'diff') await repo.openFileDiff(file)
       else if (id === 'history') await repo.openFileHistory(file)
       else if (id === 'blame') await repo.openBlame(file)
       else if (id === 'copy') {
-        await navigator.clipboard?.writeText(file)
-        repo.notify('ok', '已复制路径')
+        const ok = await copyText(file)
+        repo.notify(ok ? 'ok' : 'err', ok ? '已复制路径' : '复制失败')
+      } else if (id === 'ignore') {
+        await repo.ignoreFile(file)
       }
     },
   }
@@ -798,16 +837,57 @@ onBeforeUnmount(() => {
             @close="closeDiff()"
           />
         </div>
-        <CommitList
-          v-else-if="!repo.editorFile"
-          class="min-w-0 flex-1"
-          :rows="repo.filteredRows"
-          :selected-oid="repo.selected?.oid"
-          :loading="repo.loading"
-          @select="repo.select($event)"
-          @load-more="repo.loadMore()"
-          @context="onCommitContext"
-        />
+        <div v-else-if="!repo.editorFile" class="flex min-h-0 min-w-0 flex-1 flex-col">
+          <!-- cherry-pick / revert 进行中：给继续 / 跳过 / 中止 -->
+          <div
+            v-if="repo.sequence.inProgress"
+            class="line-b flex h-9 shrink-0 items-center gap-2 px-3 text-[11px]"
+            :style="{ background: 'rgba(251,146,60,.12)', color: '#fb923c' }"
+          >
+            <span class="shrink-0 font-medium">
+              {{ repo.sequence.kind === 'cherry-pick' ? 'Cherry-pick' : 'Revert' }} 进行中
+            </span>
+            <span v-if="repo.sequence.conflicted.length" class="min-w-0 truncate t3">
+              {{ repo.sequence.conflicted.length }} 个文件有冲突，解决后点「继续」
+            </span>
+            <span v-else-if="repo.sequence.pending" class="t3">还剩 {{ repo.sequence.pending }} 个提交</span>
+            <div class="ml-auto flex shrink-0 items-center gap-1">
+              <button
+                v-if="repo.sequence.conflicted.length"
+                class="btn px-2 py-0 text-[10px]"
+                @click="repo.openConflict(repo.sequence.conflicted[0].path)"
+              >
+                解决冲突
+              </button>
+              <button class="btn px-2 py-0 text-[10px]" @click="repo.sequenceAction('continue')">继续</button>
+              <button class="btn px-2 py-0 text-[10px]" @click="repo.sequenceAction('skip')">跳过</button>
+              <button class="btn px-2 py-0 text-[10px]" @click="repo.sequenceAction('abort')">中止</button>
+            </div>
+          </div>
+
+          <!-- 过滤到某个分支 / 提交时给一个明确的返回入口 -->
+          <div
+            v-if="repo.tip"
+            class="line-b flex h-8 shrink-0 items-center gap-2 px-3 text-[11px]"
+            :style="{ background: 'var(--panel)' }"
+          >
+            <span class="shrink-0" :style="{ color: 'var(--accent)' }">只看</span>
+            <span class="min-w-0 truncate font-mono t2" :title="repo.tip">{{ tipLabel }}</span>
+            <span class="shrink-0 t3">的历史 · {{ repo.filteredRows.length }} 条</span>
+            <button class="btn ml-auto shrink-0 px-2 py-0 text-[10px]" title="返回全部提交（Esc）" @click="repo.setTip('')">
+              ← 返回全部提交
+            </button>
+          </div>
+          <CommitList
+            class="min-w-0 flex-1"
+            :rows="repo.filteredRows"
+            :selected-oid="repo.selected?.oid"
+            :loading="repo.loading"
+            @select="repo.select($event)"
+            @load-more="repo.loadMore()"
+            @context="onCommitContext"
+          />
+        </div>
       </div>
 
       <div v-if="settings.showRight" class="panel-resizer" @pointerdown="startDrag('right', $event)" />

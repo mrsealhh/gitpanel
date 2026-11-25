@@ -328,6 +328,27 @@ const SAFE_REF = /^[A-Za-z0-9._\-\/]+$/
 
 async function checkoutRef(repoPath, ref) {
   if (!ref || ref.startsWith('-') || !SAFE_REF.test(ref)) throw new Error('非法的引用名')
+
+  // 远端分支（origin/feat/x）：自动建同名本地分支并跟踪，而不是 detached HEAD
+  const slash = ref.indexOf('/')
+  if (slash > 0) {
+    const local = ref.slice(slash + 1)
+    if (local && local !== 'HEAD') {
+      const hasRemote = await git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/remotes/${ref}`])
+        .then(() => true)
+        .catch(() => false)
+      if (hasRemote) {
+        const hasLocal = await git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${local}`])
+          .then(() => true)
+          .catch(() => false)
+        if (hasLocal) await git(repoPath, ['checkout', local])
+        else await git(repoPath, ['checkout', '-b', local, '--track', ref])
+        const branch = (await git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+        return { ok: true, branch }
+      }
+    }
+  }
+
   await git(repoPath, ['checkout', ref])
   const branch = (await git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
   return { ok: true, branch }
@@ -459,6 +480,21 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/reset-to') {
       return send(res, 200, await ops.resetTo(body.path, body.oid, body.mode))
+    }
+    if (url.pathname === '/api/cherry-pick') {
+      return send(res, 200, await ops.cherryPick(body.path, body.oid))
+    }
+    if (url.pathname === '/api/revert') {
+      return send(res, 200, await ops.revertCommit(body.path, body.oid))
+    }
+    if (url.pathname === '/api/sequence-status') {
+      return send(res, 200, await ops.sequenceStatus(body.path))
+    }
+    if (url.pathname === '/api/sequence-action') {
+      return send(res, 200, await ops.sequenceAction(body.path, body.kind, body.action))
+    }
+    if (url.pathname === '/api/ignore-file') {
+      return send(res, 200, await ops.ignoreFile(body.path, body.file))
     }
 
     // ── 工作树 ──

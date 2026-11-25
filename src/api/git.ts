@@ -19,6 +19,7 @@ import type {
   RepoHealth,
   RepoInfo,
   RepoOverview,
+  SequenceStatus,
   SyncResult,
   Stash,
   StashDiff,
@@ -224,6 +225,32 @@ export const api = {
   },
   resetTo(path: string, oid: string, mode: 'soft' | 'mixed' | 'hard'): Promise<{ ok: boolean }> {
     return post<{ ok: boolean }>('/api/reset-to', { path, oid, mode })
+  },
+
+  /* ── cherry-pick / revert / 序列状态 ── */
+
+  cherryPick(path: string, oid: string): Promise<MergeResult> {
+    return post<MergeResult>('/api/cherry-pick', { path, oid })
+  },
+
+  revert(path: string, oid: string): Promise<MergeResult> {
+    return post<MergeResult>('/api/revert', { path, oid })
+  },
+
+  sequenceStatus(path: string): Promise<SequenceStatus> {
+    return post<SequenceStatus>('/api/sequence-status', { path })
+  },
+
+  sequenceAction(
+    path: string,
+    kind: 'cherry-pick' | 'revert',
+    action: 'continue' | 'skip' | 'abort',
+  ): Promise<{ ok: boolean; output: string }> {
+    return post<{ ok: boolean; output: string }>('/api/sequence-action', { path, kind, action })
+  },
+
+  ignoreFile(path: string, file: string): Promise<{ ok: boolean; entry: string }> {
+    return post<{ ok: boolean; entry: string }>('/api/ignore-file', { path, file })
   },
 
   /* ── 交互式 rebase ── */
