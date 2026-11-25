@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from '../api/git'
 import { useSettingsStore } from './settings'
 import { explainGitError } from '../lib/gitErrors'
-import { recentList, recentPin, recentRemove, recentTouch, recentRename, cloneRepo, gitIdentity } from '../api/desktop'
+import { recentList, recentPin, recentRemove, recentTouch, recentRename, recentOrganize, recentReorder, scanRepos, cloneRepo, gitIdentity } from '../api/desktop'
 import type { RecentRepo } from '../api/desktop'
 import type {
   BlameLine,
@@ -250,6 +250,7 @@ export const useRepoStore = defineStore('repo', {
       return rows
     },
     originWeb: (s) => s.remotes.find((r) => r.name === 'origin')?.web ?? s.remotes[0]?.web ?? '',
+    pinnedRepos: (s) => s.recents.filter((r) => r.pinned),
   },
 
   actions: {
@@ -348,6 +349,51 @@ export const useRepoStore = defineStore('repo', {
       await this.loadRecents()
       this.notify('ok', final ? `已重命名为 ${final}` : '已恢复默认名称')
       return final
+    },
+
+    /** 设置仓库分组（最多三级） */
+    async setRepoGroup(path: string, groupPath: string) {
+      const cur = this.recents.find((r) => r.path === path)
+      await recentOrganize(path, groupPath, cur?.sortOrder ?? 0)
+      await this.loadRecents()
+    },
+
+    /** 按传入顺序保存手动排序 */
+    async reorderRepos(paths: string[]) {
+      await recentReorder(paths)
+      await this.loadRecents()
+    },
+
+    /** 在同一个分组内上移 / 下移仓库 */
+    async moveRepoInGroup(path: string, delta: number) {
+      const cur = this.recents.find((r) => r.path === path)
+      if (!cur) return
+      const siblings = this.recents
+        .filter((r) => r.groupPath === cur.groupPath)
+        .sort((a, b) => a.sortOrder - b.sortOrder || (a.alias || a.name).localeCompare(b.alias || b.name, 'zh-CN'))
+      const idx = siblings.findIndex((r) => r.path === path)
+      const target = idx + delta
+      if (idx < 0 || target < 0 || target >= siblings.length) return
+      const [item] = siblings.splice(idx, 1)
+      siblings.splice(target, 0, item)
+      for (let i = 0; i < siblings.length; i += 1) {
+        await recentOrganize(siblings[i].path, siblings[i].groupPath, i)
+      }
+      await this.loadRecents()
+    },
+
+    /** 扫描文件夹并导入里面的 Git 仓库，目录层级最多三级 */
+    async scanAndImport(root: string): Promise<number> {
+      const repos = await scanRepos(root)
+      let n = 0
+      for (const r of repos) {
+        await recentTouch(r.path, r.name)
+        await recentOrganize(r.path, r.groupPath, n)
+        n += 1
+      }
+      await this.loadRecents()
+      this.notify('ok', n ? `已导入 ${n} 个仓库` : '没有扫描到 Git 仓库')
+      return n
     },
 
     /** 克隆并打开：返回新仓库路径，由调用方负责切过去 */

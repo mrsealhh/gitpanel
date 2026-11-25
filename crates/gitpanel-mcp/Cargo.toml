@@ -1,6 +1,6 @@
 [package]
 name = "gitpanel-mcp"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "GitPanel 的 MCP 服务端（stdio），把仓库能力开放给第三方 AI"
 

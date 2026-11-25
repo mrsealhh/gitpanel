@@ -109,9 +109,39 @@ async function refresh() {
   repo.notify('ok', '文件列表已刷新')
 }
 
-/** 文件内容搜索（防抖） */
+/** 文件内容搜索：按文件批次循环搜索，逐步追加结果，避免单次 git grep 卡死 */
 let grepTimer: number | undefined
 let grepSeq = 0
+const searchProgress = ref({ done: 0, total: 0 })
+const GREP_BATCH = 40
+
+async function runContentSearch(query: string, mine: number) {
+  if (!repo.path) return
+  try {
+    if (!allFiles.value.length) await loadAllFiles()
+    if (mine !== grepSeq) return
+    const files = allFiles.value
+    searchProgress.value = { done: 0, total: files.length }
+    for (let i = 0; i < files.length; i += GREP_BATCH) {
+      if (mine !== grepSeq) return
+      const chunk = files.slice(i, i + GREP_BATCH)
+      const r = await api.fsGrepBatch(repo.path, query, chunk, Math.max(1, 300 - hits.value.length))
+      if (mine !== grepSeq) return
+      if (r.hits.length) hits.value = hits.value.concat(r.hits)
+      searchProgress.value = { done: Math.min(files.length, i + chunk.length), total: files.length }
+      if (hits.value.length >= 300 || r.limitReached) {
+        hitLimit.value = true
+        break
+      }
+    }
+  } catch (e) {
+    if (mine !== grepSeq) return
+    repo.notify('err', String((e as Error).message || e))
+  } finally {
+    if (mine === grepSeq) hitsLoading.value = false
+  }
+}
+
 function scheduleGrep() {
   if (grepTimer) window.clearTimeout(grepTimer)
   const query = q.value.trim()
@@ -120,26 +150,16 @@ function scheduleGrep() {
     hits.value = []
     hitLimit.value = false
     hitsLoading.value = false
+    searchProgress.value = { done: 0, total: 0 }
     return
   }
-  // 立即给出反馈，避免大仓库 git grep 还没返回时看起来没响应
+  // 立即给出反馈，避免大仓库搜索还没返回时看起来没响应
   const mine = ++grepSeq
   hitsLoading.value = true
-  grepTimer = window.setTimeout(async () => {
-    if (!repo.path) return
-    try {
-      const r = await api.fsGrep(repo.path, query, 300)
-      if (mine !== grepSeq) return
-      hits.value = r.hits
-      hitLimit.value = r.limitReached
-    } catch (e) {
-      if (mine !== grepSeq) return
-      hits.value = []
-      repo.notify('err', String((e as Error).message || e))
-    } finally {
-      if (mine === grepSeq) hitsLoading.value = false
-    }
-  }, 280)
+  hitLimit.value = false
+  hits.value = []
+  searchProgress.value = { done: 0, total: allFiles.value.length }
+  grepTimer = window.setTimeout(() => void runContentSearch(query, mine), 280)
 }
 
 watch(q, scheduleGrep)
@@ -151,6 +171,7 @@ function clearQuery() {
   hits.value = []
   hitLimit.value = false
   hitsLoading.value = false
+  searchProgress.value = { done: 0, total: 0 }
 }
 
 async function toggle(entry: FsEntry) {
@@ -285,7 +306,8 @@ onMounted(() => {
             <span class="inline-block h-2 w-2 animate-spin rounded-full border border-current border-r-transparent" />索引中…
           </span>
           <span v-if="hitsLoading" class="ml-1 inline-flex items-center gap-1 opacity-60">
-            <span class="inline-block h-2 w-2 animate-spin rounded-full border border-current border-r-transparent" />搜索中…
+            <span class="inline-block h-2 w-2 animate-spin rounded-full border border-current border-r-transparent" />
+            搜索中{{ searchProgress.total ? ` ${searchProgress.done}/${searchProgress.total}` : '…' }}
           </span>
         </div>
 

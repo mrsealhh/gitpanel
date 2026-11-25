@@ -154,6 +154,12 @@ withDefaults(defineProps<{ name: string; size?: number }>(), { size: 16 })
       <path d="M12 4v9M8 9l4 4 4-4" />
       <path d="M4 20h16" />
     </template>
+    <template v-else-if="name === 'dashboard'">
+      <rect x="3" y="3" width="7" height="7" rx="1.5" />
+      <rect x="14" y="3" width="7" height="7" rx="1.5" />
+      <rect x="3" y="14" width="7" height="7" rx="1.5" />
+      <rect x="14" y="14" width="7" height="7" rx="1.5" />
+    </template>
     <template v-else-if="name === 'expand'">
       <path d="M12 20v-9M8 15l4-4 4 4" />
       <path d="M4 4h16" />

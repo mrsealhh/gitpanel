@@ -426,7 +426,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/health') return send(res, 200, { ok: true, port: PORT })
 
     const body = req.method === 'POST' ? await readBody(req) : {}
-    if (!body.path && url.pathname !== '/api/repos-overview') {
+    if (!body.path && url.pathname !== '/api/repos-overview' && url.pathname !== '/api/scan-repos') {
       return send(res, 400, { error: 'path required' })
     }
 
@@ -595,6 +595,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/fs-grep') {
       return send(res, 200, await ops.fsGrep(body.path, body.query, body.max))
     }
+    if (url.pathname === '/api/fs-grep-batch') {
+      return send(res, 200, await ops.fsGrepBatch(body.path, body.query, body.files, body.max))
+    }
     if (url.pathname === '/api/fs-read') {
       return send(res, 200, await ops.fsRead(body.path, body.file, body.maxBytes, body.offset))
     }
@@ -614,6 +617,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/repos-overview') {
       return send(res, 200, await ops.reposOverview(body.paths))
+    }
+    if (url.pathname === '/api/scan-repos') {
+      return send(res, 200, await ops.scanRepos(body.root, body.maxDepth))
     }
     if (url.pathname === '/api/clone') {
       return send(res, 200, await ops.cloneRepo(body.url, body.target))

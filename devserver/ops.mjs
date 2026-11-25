@@ -808,6 +808,48 @@ export async function searchHistory(repo, query, limit = 200) {
   }
 }
 
+const SCAN_SKIP = new Set([
+  'node_modules', 'target', 'dist', 'build', 'bin', 'obj', 'vendor', 'venv', '.venv',
+  '__pycache__', '.next', '.nuxt', 'out', 'coverage', '.git', '.svn', '.hg',
+])
+
+export async function scanRepos(root, maxDepth = 6) {
+  const base = path.resolve(String(root || ''))
+  if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) throw new Error('请选择一个文件夹')
+  const max = Math.max(1, Math.min(12, Number(maxDepth) || 6))
+  const repos = []
+  const walk = (dir, depth) => {
+    if (repos.length >= 300) return
+    let entries = []
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const ent of entries) {
+      if (repos.length >= 300) return
+      if (!ent.isDirectory()) continue
+      const name = ent.name
+      if (name.startsWith('.') || SCAN_SKIP.has(name)) continue
+      const full = path.join(dir, name)
+      if (fs.existsSync(path.join(full, '.git'))) {
+        const rel = path.relative(base, full).split(path.sep).filter(Boolean)
+        const groupPath = rel.slice(0, Math.max(0, rel.length - 1)).slice(0, 3).join('/')
+        repos.push({ path: full.replace(/\\/g, '/'), name, groupPath })
+        continue
+      }
+      if (depth < max) walk(full, depth + 1)
+    }
+  }
+  if (fs.existsSync(path.join(base, '.git'))) {
+    repos.push({ path: base.replace(/\\/g, '/'), name: path.basename(base), groupPath: '' })
+  } else {
+    walk(base, 1)
+  }
+  repos.sort((a, b) => a.groupPath.localeCompare(b.groupPath) || a.name.localeCompare(b.name))
+  return { repos }
+}
+
 export async function blameFile(repo, file, max = 2000) {
   const git = makeGit(repo)
   const out = await git(['blame', '--line-porcelain', '--', file])
@@ -942,6 +984,47 @@ export async function fsGrep(repo, query, max = 300) {
     hits.push({ file, line: no, text: line.slice(second + 1).trimEnd() })
   }
   return { hits, limitReached: hits.length >= limit }
+}
+
+export async function fsGrepBatch(repo, query, files, max = 300) {
+  const root = path.resolve(repo)
+  const q = String(query || '').trim()
+  const list = Array.isArray(files) ? files : []
+  if (!q) return { hits: [], checked: 0, limitReached: false }
+  const limit = Math.max(1, Number(max) || 300)
+  const hits = []
+  let checked = 0
+  let limitReached = false
+
+  for (const file of list) {
+    if (hits.length >= limit) {
+      limitReached = true
+      break
+    }
+    let target
+    try {
+      target = safeJoin(root, file)
+      const stat = fs.statSync(target)
+      if (!stat.isFile() || stat.size > 2 * 1024 * 1024) continue
+      const bytes = fs.readFileSync(target)
+      checked += 1
+      if (bytes.subarray(0, 8000).includes(0)) continue
+      const lines = bytes.toString('utf8').split('\n')
+      for (let i = 0; i < lines.length; i += 1) {
+        if (lines[i].includes(q)) {
+          hits.push({ file, line: i + 1, text: lines[i].replace(/\r$/, '') })
+          if (hits.length >= limit) {
+            limitReached = true
+            break
+          }
+        }
+      }
+    } catch {
+      /* 单个文件失败跳过 */
+    }
+  }
+
+  return { hits, checked, limitReached }
 }
 
 export async function fsRead(repo, file, maxBytes = 512 * 1024, offset = 0) {

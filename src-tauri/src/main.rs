@@ -273,6 +273,12 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
         "fs-list" => fs_list(repo.path(), &s(&p, "dir"))?,
         "fs-files" => repo_files(repo.path())?,
         "fs-grep" => fs_grep(repo.path(), &s(&p, "query"), n(&p, "max", 300))?,        "fs-read" => fs_read(repo.path(), &s(&p, "file"), n(&p, "maxBytes", 2 * 1024 * 1024), n(&p, "offset", 0) as u64)?,
+        "fs-grep-batch" => fs_grep_batch(
+            repo.path(),
+            &s(&p, "query"),
+            &arr(&p, "files"),
+            n(&p, "max", 300),
+        )?,
         "fs-write" => fs_write(repo.path(), &s(&p, "file"), &s(&p, "content"))?,
 
         other => return Err(anyhow!("未知命令: {other}")),
@@ -353,12 +359,82 @@ fn fs_grep(root: &std::path::Path, query: &str, max: u32) -> Result<Value> {
     Ok(json!({ "hits": hits, "limitReached": hits.len() >= limit }))
 }
 
-/// 把相对路径解析到仓库内，越界（../、绝对路径外跳）直接拒绝
+/// 按文件批次搜索内容（前端循环调用，逐步返回结果，避免单次卡死）
+fn fs_grep_batch(
+    root: &std::path::Path,
+    query: &str,
+    files: &[String],
+    max: u32,
+) -> Result<Value> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(json!({ "hits": [], "checked": 0, "limitReached": false }));
+    }
+    let limit = max.max(1) as usize;
+    let mut hits = Vec::new();
+    let mut checked = 0usize;
+    let mut limit_reached = false;
+
+    for file in files {
+        if hits.len() >= limit {
+            limit_reached = true;
+            break;
+        }
+        let Ok(target) = safe_join(root, file) else { continue };
+        let Ok(meta) = std::fs::metadata(&target) else { continue };
+        if !meta.is_file() || meta.len() > 2 * 1024 * 1024 {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&target) else { continue };
+        checked += 1;
+        if bytes.iter().take(8000).any(|b| *b == 0) {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        for (i, line) in text.lines().enumerate() {
+            if line.contains(q) {
+                hits.push(json!({
+                    "file": file,
+                    "line": i + 1,
+                    "text": line.trim_end(),
+                }));
+                if hits.len() >= limit {
+                    limit_reached = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(json!({ "hits": hits, "checked": checked, "limitReached": limit_reached }))
+}
+
+/// 把相对路径解析到仓库内（只做字面越界检查）。
+/// 允许仓库内的符号链接目录 / 文件（例如 docs/superpowers/plans 指向别处），
+/// 只拒绝 `..`、绝对路径、盘符和 ADS 形式的路径。
 fn safe_join(root: &std::path::Path, rel: &str) -> Result<std::path::PathBuf> {
-    let rel = rel.trim_start_matches(['/', '\\']);
-    let joined = root.join(rel.replace('\\', "/"));
+    let norm = rel.replace('\\', "/");
+    let parts: Vec<&str> = norm
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
+    if parts.iter().any(|p| *p == "..") || norm.contains(':') {
+        return Err(anyhow!("路径越界：{rel}"));
+    }
+    if std::path::Path::new(&norm).is_absolute() {
+        return Err(anyhow!("路径越界：{rel}"));
+    }
+    let mut joined = root.to_path_buf();
+    for p in parts {
+        joined.push(p);
+    }
+    Ok(joined)
+}
+
+/// 写文件时额外做一次真实路径校验，避免通过符号链接写到仓库外。
+fn safe_join_strict(root: &std::path::Path, rel: &str) -> Result<std::path::PathBuf> {
+    let joined = safe_join(root, rel)?;
     let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    // 目标可能还不存在（新建文件），先按父目录校验
     let probe = if joined.exists() {
         joined.clone()
     } else {
@@ -498,7 +574,7 @@ fn fs_read(root: &std::path::Path, file: &str, max_bytes: u32, offset: u64) -> R
 }
 
 fn fs_write(root: &std::path::Path, file: &str, content: &str) -> Result<Value> {
-    let target = safe_join(root, file)?;
+    let target = safe_join_strict(root, file)?;
     // 已有文件：只允许写 UTF-8（含 BOM），其它编码一律拒绝，避免二次破坏
     let keep_bom = match std::fs::read(&target) {
         Ok(old) => {
@@ -545,6 +621,8 @@ struct RecentRepo {
     alias: String,
     opened_at: i64,
     pinned: bool,
+    group_path: String,
+    sort_order: i64,
 }
 
 fn open_db(app: &AppHandle) -> Result<Connection> {
@@ -559,7 +637,9 @@ fn open_db(app: &AppHandle) -> Result<Connection> {
             path TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             opened_at INTEGER NOT NULL,
-            pinned INTEGER NOT NULL DEFAULT 0
+            pinned INTEGER NOT NULL DEFAULT 0,
+            group_path TEXT NOT NULL DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS worktree_meta (
             path TEXT PRIMARY KEY,
@@ -571,6 +651,8 @@ fn open_db(app: &AppHandle) -> Result<Connection> {
     )?;
     // 老库升级：补 alias 列（已存在会报错，忽略即可）
     let _ = conn.execute("ALTER TABLE recent ADD COLUMN alias TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE recent ADD COLUMN group_path TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE recent ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE worktree_meta ADD COLUMN task TEXT NOT NULL DEFAULT ''", []);
     Ok(conn)
 }
@@ -586,7 +668,7 @@ fn now_ms() -> i64 {
 fn recent_list(db: tauri::State<Db>) -> Result<Vec<RecentRepo>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT path, name, alias, opened_at, pinned FROM recent ORDER BY pinned DESC, opened_at DESC LIMIT 50")
+        .prepare("SELECT path, name, alias, opened_at, pinned, group_path, sort_order FROM recent ORDER BY pinned DESC, group_path ASC, sort_order ASC, opened_at DESC LIMIT 200")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
@@ -596,6 +678,8 @@ fn recent_list(db: tauri::State<Db>) -> Result<Vec<RecentRepo>, String> {
                 alias: r.get(2)?,
                 opened_at: r.get(3)?,
                 pinned: r.get::<_, i64>(4)? != 0,
+                group_path: r.get(5)?,
+                sort_order: r.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -740,6 +824,154 @@ fn recent_pin(path: String, pinned: bool, db: tauri::State<Db>) -> Result<(), St
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn normalize_group_path(raw: &str) -> String {
+    raw.split(['/', '\\'])
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+        .take(3)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// 仓库分组 / 手动排序：group_path 最多三级，空字符串表示不分组
+#[tauri::command]
+fn project_organize(
+    path: String,
+    group_path: String,
+    sort_order: i64,
+    db: tauri::State<Db>,
+) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE recent SET group_path = ?2, sort_order = ?3 WHERE path = ?1",
+        rusqlite::params![path, normalize_group_path(&group_path), sort_order],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 按传入顺序重写手动排序
+#[tauri::command]
+fn project_reorder(paths: Vec<String>, db: tauri::State<Db>) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    for (i, p) in paths.iter().enumerate() {
+        conn.execute(
+            "UPDATE recent SET sort_order = ?2 WHERE path = ?1",
+            rusqlite::params![p, i as i64],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScannedRepo {
+    path: String,
+    name: String,
+    group_path: String,
+}
+
+fn skip_scan_dir(name: &str) -> bool {
+    matches!(
+        name,
+        "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | "bin"
+            | "obj"
+            | "vendor"
+            | "venv"
+            | ".venv"
+            | "__pycache__"
+            | ".next"
+            | ".nuxt"
+            | "out"
+            | "coverage"
+            | ".git"
+            | ".svn"
+            | ".hg"
+    )
+}
+
+fn scan_walk(
+    dir: &std::path::Path,
+    root: &std::path::Path,
+    depth: u32,
+    max: u32,
+    out: &mut Vec<ScannedRepo>,
+) {
+    if out.len() >= 300 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else { continue };
+        if !ft.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || skip_scan_dir(&name) {
+            continue;
+        }
+        if path.join(".git").exists() {
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            let comps: Vec<String> = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .collect();
+            let group = comps
+                .iter()
+                .take(comps.len().saturating_sub(1))
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("/");
+            out.push(ScannedRepo {
+                path: path.to_string_lossy().to_string().replace('\\', "/"),
+                name,
+                group_path: group,
+            });
+            continue;
+        }
+        if depth < max {
+            scan_walk(&path, root, depth + 1, max, out);
+        }
+    }
+}
+
+/// 扫描文件夹里的 Git 仓库，并按相对目录生成最多三级分组
+#[tauri::command]
+fn scan_repos(root: String, max_depth: Option<u32>) -> Result<Vec<ScannedRepo>, String> {
+    let root_path = std::path::PathBuf::from(root.trim());
+    if !root_path.is_dir() {
+        return Err("请选择一个文件夹".into());
+    }
+    let max = max_depth.unwrap_or(6).clamp(1, 12);
+    let mut out = Vec::new();
+    if root_path.join(".git").exists() {
+        let name = root_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| root_path.to_string_lossy().to_string());
+        out.push(ScannedRepo {
+            path: root_path.to_string_lossy().to_string().replace('\\', "/"),
+            name,
+            group_path: String::new(),
+        });
+    } else {
+        scan_walk(&root_path, &root_path, 1, max, &mut out);
+    }
+    out.sort_by(|a, b| {
+        a.group_path
+            .cmp(&b.group_path)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(out)
 }
 
 /* ─────────────── 工作树 ↔ AI 会话元数据 ─────────────── */
@@ -936,6 +1168,46 @@ fn open_external(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 在系统资源管理器 / Finder 中定位文件或打开目录
+#[tauri::command]
+fn reveal_path(path: String, is_dir: bool) -> Result<(), String> {
+    let p = std::path::PathBuf::from(path.trim());
+    if !p.exists() {
+        return Err("路径不存在".into());
+    }
+    #[cfg(windows)]
+    {
+        let mut cmd = git_core::proc::command("explorer");
+        if is_dir {
+            cmd.arg(&p);
+        } else {
+            cmd.arg(format!("/select,{}", p.display()));
+        }
+        cmd.spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = git_core::proc::command("open");
+        if !is_dir {
+            cmd.arg("-R");
+        }
+        cmd.arg(&p).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        let target = if is_dir {
+            p.clone()
+        } else {
+            p.parent().map(|x| x.to_path_buf()).unwrap_or(p.clone())
+        };
+        git_core::proc::command("xdg-open")
+            .arg(target)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn hide_to_tray(app: AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -1022,6 +1294,10 @@ fn main() {
             worktree_meta_touch,
             repos_overview,
             project_rename,
+            project_organize,
+            project_reorder,
+            scan_repos,
+            reveal_path,
             clone_repo,
             git_identity
         ])

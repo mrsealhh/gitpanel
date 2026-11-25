@@ -10,13 +10,32 @@ export interface RecentRepo {
   alias: string
   openedAt: number
   pinned: boolean
+  /** 分组路径，最多三级，如 公司/前端/重点项目 */
+  groupPath: string
+  /** 手动排序序号（越小越靠前） */
+  sortOrder: number
+}
+
+export interface ScannedRepo {
+  path: string
+  name: string
+  groupPath: string
 }
 
 const LS_KEY = 'gitpanel.recents'
 
 function lsList(): RecentRepo[] {
   try {
-    return JSON.parse(localStorage.getItem(LS_KEY) || '[]')
+    const raw = JSON.parse(localStorage.getItem(LS_KEY) || '[]') as Partial<RecentRepo>[]
+    return raw.map((r) => ({
+      path: String(r.path || ''),
+      name: String(r.name || ''),
+      alias: String(r.alias || ''),
+      openedAt: Number(r.openedAt) || 0,
+      pinned: !!r.pinned,
+      groupPath: String(r.groupPath || ''),
+      sortOrder: Number(r.sortOrder) || 0,
+    }))
   } catch {
     return []
   }
@@ -48,8 +67,14 @@ export async function recentTouch(path: string, name: string): Promise<void> {
     }
     return
   }
+  const existing = lsList().find((r) => r.path === path)
   const list = lsList().filter((r) => r.path !== path)
-  list.unshift({ path, name, alias: '', openedAt: Date.now(), pinned: false })
+  list.unshift({
+    ...(existing ?? { alias: '', pinned: false, groupPath: '', sortOrder: 0 }),
+    path,
+    name,
+    openedAt: Date.now(),
+  })
   lsSave(list.slice(0, 50))
 }
 
@@ -67,6 +92,55 @@ export async function recentPin(path: string, pinned: boolean): Promise<void> {
     return
   }
   lsSave(lsList().map((r) => (r.path === path ? { ...r, pinned } : r)))
+}
+
+/** 设置仓库分组 / 手动排序（分组最多三级） */
+export async function recentOrganize(path: string, groupPath: string, sortOrder: number): Promise<void> {
+  const normalize = (raw: string) =>
+    raw
+      .split(/[\\/]/)
+      .map((s) => s.trim())
+      .filter((s) => s && s !== '.' && s !== '..')
+      .slice(0, 3)
+      .join('/')
+  const group = normalize(groupPath)
+  if (isTauri) {
+    await invoke('project_organize', { path, groupPath: group, sortOrder })
+    return
+  }
+  lsSave(lsList().map((r) => (r.path === path ? { ...r, groupPath: group, sortOrder } : r)))
+}
+
+/** 按传入顺序写入手动排序 */
+export async function recentReorder(paths: string[]): Promise<void> {
+  if (isTauri) {
+    await invoke('project_reorder', { paths })
+    return
+  }
+  const order = new Map(paths.map((p, i) => [p, i]))
+  lsSave(lsList().map((r) => (order.has(r.path) ? { ...r, sortOrder: order.get(r.path)! } : r)))
+}
+
+/** 扫描文件夹里的 Git 仓库；Tauri 走 Rust，浏览器开发态走 devserver */
+export async function scanRepos(root: string, maxDepth = 6): Promise<ScannedRepo[]> {
+  if (isTauri) {
+    return invoke<ScannedRepo[]>('scan_repos', { root, maxDepth })
+  }
+  const res = await fetch('http://127.0.0.1:7717/api/scan-repos', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ root, maxDepth }),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error((data as { error?: string }).error || '扫描失败')
+  return (data as { repos: ScannedRepo[] }).repos
+}
+
+/** 在系统资源管理器中定位文件 / 打开目录（仅桌面态） */
+export async function revealPath(path: string, isDir = false): Promise<boolean> {
+  if (!isTauri) return false
+  await invoke('reveal_path', { path, isDir })
+  return true
 }
 
 /** 重命名项目：名字全局唯一，冲突自动补 1/2/3，返回最终名称 */

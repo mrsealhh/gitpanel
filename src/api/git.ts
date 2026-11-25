@@ -423,6 +423,23 @@ export const api = {
     )
   },
 
+  fsGrepBatch(
+    path: string,
+    query: string,
+    files: string[],
+    max = 300,
+  ): Promise<{
+    hits: { file: string; line: number; text: string }[]
+    checked: number
+    limitReached: boolean
+  }> {
+    return post<{
+      hits: { file: string; line: number; text: string }[]
+      checked: number
+      limitReached: boolean
+    }>('/api/fs-grep-batch', { path, query, files, max })
+  },
+
   fsRead(path: string, file: string, maxBytes = 512 * 1024, offset = 0): Promise<FileText> {
     return post<FileText>('/api/fs-read', { path, file, maxBytes, offset })
   },

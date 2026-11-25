@@ -26,6 +26,7 @@ import InputDialog from './components/InputDialog.vue'
 import PatchModal from './components/PatchModal.vue'
 import RebaseDialog from './components/RebaseDialog.vue'
 import RemoteDialog from './components/RemoteDialog.vue'
+import RepoManagerDialog from './components/RepoManagerDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import SidePanel from './components/SidePanel.vue'
 import SnapshotPanel from './components/SnapshotPanel.vue'
@@ -44,6 +45,7 @@ import {
   minimizeWindow,
   openExternal,
   pickFolder,
+  revealPath,
   startResize,
   toggleMaximize,
 } from './api/desktop'
@@ -70,6 +72,7 @@ const maximized = ref(false)
 const diffFullscreen = ref(false)
 const showWorktreeDialog = ref(false)
 const showRemotes = ref(false)
+const showRepoManager = ref(false)
 const showDashboard = ref(false)
 const showClone = ref(false)
 const cloneUrl = ref('')
@@ -174,6 +177,13 @@ function onRenameProject(path: string) {
 
 const identityMissing = computed(
   () => !!repo.info && !repo.identity.email && !repo.identityDismissed,
+)
+
+/** 顶部置顶仓库 tab（按手动排序） */
+const pinnedRepos = computed(() =>
+  [...repo.pinnedRepos].sort(
+    (a, b) => a.sortOrder - b.sortOrder || (a.alias || a.name).localeCompare(b.alias || b.name, 'zh-CN'),
+  ),
 )
 
 /** 文档标签栏：编辑器 + diff 合并成一排，可横向滚动 */
@@ -612,9 +622,22 @@ async function copyLabeledPath(text: string, label: string) {
   repo.notify(ok ? 'ok' : 'err', ok ? `已复制${label}` : '复制失败')
 }
 
+async function revealInExplorer(file: string, isDir = false) {
+  if (!isTauri) {
+    repo.notify('info', '「在资源管理器中打开」仅桌面版支持')
+    return
+  }
+  try {
+    await revealPath(absRepoPath(file), isDir)
+  } catch (e) {
+    repo.notify('err', String((e as Error).message || e))
+  }
+}
+
 function onFileContext({ file, x, y, isDir = false }: { file: string; x: number; y: number; isDir?: boolean }) {
   const items: MenuItem[] = isDir
     ? [
+        { id: 'reveal', label: '在资源管理器中打开' },
         { id: 'copy-abs', label: '复制目录路径' },
         { id: 'copy-rel', label: '复制相对路径' },
       ]
@@ -623,6 +646,7 @@ function onFileContext({ file, x, y, isDir = false }: { file: string; x: number;
         { id: 'history', label: '文件历史' },
         { id: 'blame', label: 'Blame（逐行归属）' },
         { id: 'divider', label: '', divider: true },
+        { id: 'reveal', label: '在资源管理器中定位' },
         { id: 'copy-rel', label: '复制文件路径（相对）' },
         { id: 'copy-abs', label: '复制绝对路径' },
         { id: 'copy-dir', label: '复制目录路径' },
@@ -638,6 +662,7 @@ function onFileContext({ file, x, y, isDir = false }: { file: string; x: number;
       if (id === 'diff') await repo.openFileDiff(file)
       else if (id === 'history') await repo.openFileHistory(file)
       else if (id === 'blame') await repo.openBlame(file)
+      else if (id === 'reveal') await revealInExplorer(file, isDir)
       else if (id === 'copy-rel') await copyLabeledPath(file, isDir ? '目录路径' : '文件路径')
       else if (id === 'copy-abs') await copyLabeledPath(absRepoPath(file), isDir ? '目录路径' : '绝对路径')
       else if (id === 'copy-dir') await copyLabeledPath(absDirPath(file), '目录路径')
@@ -657,6 +682,7 @@ function onTabContext(e: MouseEvent, tab: { key: string; title: string }) {
       { id: 'copy-rel', label: '复制文件路径（相对）' },
       { id: 'copy-abs', label: '复制绝对路径' },
       { id: 'copy-dir', label: '复制目录路径' },
+      { id: 'reveal', label: '在资源管理器中定位' },
       { id: 'divider', label: '', divider: true },
       { id: 'close', label: '关闭这个标签' },
     ],
@@ -664,6 +690,7 @@ function onTabContext(e: MouseEvent, tab: { key: string; title: string }) {
       if (id === 'copy-rel') await copyLabeledPath(file, '文件路径')
       else if (id === 'copy-abs') await copyLabeledPath(absRepoPath(file), '绝对路径')
       else if (id === 'copy-dir') await copyLabeledPath(absDirPath(file), '目录路径')
+      else if (id === 'reveal') await revealInExplorer(file, false)
       else if (id === 'close') closeTab(tab.key)
     },
   }
@@ -836,6 +863,7 @@ onBeforeUnmount(() => {
         @rename="onRenameProject"
         @clone="onCloneFromUrl"
         @browse="browseFolder"
+        @manage="showRepoManager = true"
       />
 
       <!-- 搜索 + 日期筛选放在一起 -->
@@ -937,6 +965,7 @@ onBeforeUnmount(() => {
         <span class="mx-1 h-4 w-px" :style="{ background: 'var(--border)' }" />
 
         <IconButton name="command" title="命令面板 (Ctrl+K)" @click="showPalette = true" />
+        <IconButton name="dashboard" title="多仓库看板" @click="showDashboard = true" />
         <IconButton name="theme" :title="`主题：${settings.themeLabel}`" @click="cycleTheme" />
         <IconButton name="github" title="打开 GitHub 仓库" @click="openExternal(REPO_URL)" />
         <IconButton name="settings" title="设置 (Ctrl+,)" @click="showSettings = true" />
@@ -949,6 +978,32 @@ onBeforeUnmount(() => {
         </template>
       </div>
     </header>
+
+    <!-- 置顶仓库快速切换 tab，超出横向滚动 -->
+    <div
+      v-if="pinnedRepos.length"
+      class="line-b flex h-8 shrink-0 items-center gap-1 px-2"
+      :style="{ background: 'var(--panel-2)' }"
+    >
+      <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <button
+          v-for="r in pinnedRepos"
+          :key="r.path"
+          class="flex h-6 shrink-0 items-center gap-1 rounded px-2 text-[11px]"
+          :style="
+            r.path === repo.info?.path
+              ? { background: 'var(--accent-weak)', color: 'var(--accent)' }
+              : { color: 'var(--text-dim)' }
+          "
+          :title="r.path"
+          @click="openPath(r.path)"
+        >
+          <Icon name="pin" :size="10" class="shrink-0 opacity-60" />
+          <span class="max-w-[160px] truncate">{{ r.alias || r.name }}</span>
+        </button>
+      </div>
+      <IconButton compact name="settings" title="整理仓库 / 分组" :size="13" @click="showRepoManager = true" />
+    </div>
 
     <!-- 本机 git 身份提示（只读检查，不保存凭据） -->
     <div
@@ -1327,7 +1382,7 @@ onBeforeUnmount(() => {
       @close="repo.closeHistorySearch()"
       @open="onHistoryHit"
     />
-    <DashboardModal v-if="showDashboard" @close="showDashboard = false" @open="openPath" />
+    <DashboardModal v-if="showDashboard" @close="showDashboard = false" @open="openPath" @manage="showRepoManager = true" />
     <CloneDialog
       v-if="showClone"
       :initial-url="cloneUrl"
@@ -1343,6 +1398,7 @@ onBeforeUnmount(() => {
     <LogModal v-if="repo.logOpen" @close="repo.logOpen = false" />
     <WorktreeDialog v-if="showWorktreeDialog" @close="showWorktreeDialog = false" />
     <RemoteDialog v-if="showRemotes" @close="showRemotes = false" />
+    <RepoManagerDialog v-if="showRepoManager" @close="showRepoManager = false" />
     <CommandPalette
       v-if="showPalette"
       @close="showPalette = false"
