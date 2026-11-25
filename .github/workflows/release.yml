@@ -65,8 +65,9 @@ jobs:
             args: '--config src-tauri/tauri.release.conf.json'
     runs-on: ${{ matrix.platform }}
     env:
-      # CI 上不重定向到 C:\cargo-target，交给 rust-cache 管理
-      CARGO_TARGET_DIR: target
+      # 与 tauri-action 期望的产物目录一致（src-tauri/target），
+      # 同时覆盖仓库里 .cargo/config.toml 的本地 target 目录设置
+      CARGO_TARGET_DIR: ${{ github.workspace }}/src-tauri/target
     steps:
       - uses: actions/checkout@v4
 
@@ -89,7 +90,7 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: '. -> target'
+          workspaces: '. -> src-tauri/target'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
