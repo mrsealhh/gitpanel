@@ -65,8 +65,8 @@ jobs:
             args: '--config src-tauri/tauri.release.conf.json'
     runs-on: ${{ matrix.platform }}
     env:
-      # 与 tauri-action 期望的产物目录一致（src-tauri/target），
-      # 同时覆盖仓库里 .cargo/config.toml 的本地 target 目录设置
+      # 与 tauri-action 期望的产物目录一致（src-tauri/target）；
+      # 仓库里的 .cargo/config.toml 不再写死平台相关目录，这里显式指定
       CARGO_TARGET_DIR: ${{ github.workspace }}/src-tauri/target
     steps:
       - uses: actions/checkout@v4

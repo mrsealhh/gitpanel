@@ -36,7 +36,7 @@
 **改写历史**
 - 交互式 rebase：pick / reword / edit / squash / fixup / drop，支持冲突与编辑暂停
 - reset soft / mixed / hard，reflog 一键回滚
-- **安全网**：合并、拉取、重置、丢弃前自动打快照，可回滚，也可彻底删除
+- **安全网**：合并、拉取、重置、丢弃前自动打快照，可回滚，也可彻底删除；默认不自动清理，可在设置里开启「删除超过 N 天（默认 30 天）的快照」
 
 **工作树与多仓库**
 - 工作树（并行副本）增删、prune
@@ -90,8 +90,12 @@ pnpm desktop:build
 
 ```bash
 pnpm typecheck
-cargo test -p git-core
+pnpm rust:test       # 等价于 cargo test -p git-core
 ```
+
+> 编译产物目录：`pnpm rust:*` / `pnpm desktop:*` 会在 Windows 上默认输出到
+> `C:\cargo-target\gitpanel`（可用 `CARGO_TARGET_DIR` 覆盖）；macOS / Linux
+> 保持 Cargo 默认的 `target/`。直接用 `cargo` 命令时各平台也都使用默认目录。
 
 ## 架构
 
@@ -146,7 +150,7 @@ scripts/              开发脚本（准备 MCP 产物、图标、CDP 截图）
 ## 参与
 
 欢迎提 Issue 和 PR。改动请保持与现有结构、命名和代码风格一致；
-提交前跑一遍 `pnpm typecheck && cargo test -p git-core`。
+提交前跑一遍 `pnpm typecheck && pnpm rust:test`。
 
 ## 许可
 

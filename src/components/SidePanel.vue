@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { BranchStatus, RepoRef } from '../api/types'
+import { useRepoStore } from '../stores/repo'
 import { buildBranchTree, filterTree, flattenTree, type FlatRow, type TreeNode } from '../lib/branchTree'
 
 const props = defineProps<{
@@ -24,6 +25,20 @@ const statusMap = computed(() => {
   const map: Record<string, BranchStatus> = {}
   for (const s of props.statuses ?? []) map[s.name] = s
   return map
+})
+
+/** 当前分支的改动统计，方便一眼看出工作区状态 */
+const repo = useRepoStore()
+const changeStats = computed(() => {
+  const s = repo.status
+  if (!s) return null
+  return {
+    staged: s.staged.length,
+    unstaged: s.unstaged.length,
+    untracked: s.untracked.length,
+    conflicted: s.conflicted.length,
+    total: s.staged.length + s.unstaged.length + s.untracked.length + s.conflicted.length,
+  }
 })
 
 const q = ref('')
@@ -141,7 +156,20 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
       <div class="truncate text-[13px] font-semibold t1">{{ name }}</div>
       <div class="mt-0.5 flex items-center gap-1.5 text-[11px] t3">
         <span class="h-1.5 w-1.5 rounded-full" style="background: var(--accent)" />
-        {{ branch }}
+        <span class="truncate">{{ branch }}</span>
+        <span v-if="statusMap[branch]?.ahead" class="shrink-0" :style="{ color: 'var(--accent)' }">
+          ↑{{ statusMap[branch].ahead }}
+        </span>
+        <span v-if="statusMap[branch]?.behind" class="shrink-0" :style="{ color: 'var(--badge-head-fg)' }">
+          ↓{{ statusMap[branch].behind }}
+        </span>
+      </div>
+      <div v-if="changeStats" class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] t3">
+        <span v-if="changeStats.staged" :style="{ color: 'var(--badge-head-fg)' }">已暂存 {{ changeStats.staged }}</span>
+        <span v-if="changeStats.unstaged" :style="{ color: 'var(--accent)' }">未暂存 {{ changeStats.unstaged }}</span>
+        <span v-if="changeStats.untracked">未跟踪 {{ changeStats.untracked }}</span>
+        <span v-if="changeStats.conflicted" style="color: #fb923c">冲突 {{ changeStats.conflicted }}</span>
+        <span v-if="!changeStats.total">工作区干净</span>
       </div>
     </div>
 

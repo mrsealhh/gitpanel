@@ -219,6 +219,28 @@ export async function deleteAllSnapshots(repo) {
   return { ok: true, count }
 }
 
+/** 自动清理早于 days 天的快照；由前端设置决定是否调用 */
+export async function pruneSnapshots(repo, days = 30) {
+  const keep = Number(days)
+  if (!Number.isFinite(keep) || keep <= 0) throw new Error('保留天数必须大于 0')
+  const { snapshots } = await listSnapshots(repo)
+  const cutoff = Math.floor(Date.now() / 1000) - Math.floor(keep) * 86400
+  const git = makeGit(repo)
+  let count = 0
+  for (const s of snapshots) {
+    // 没有创建时间的旧引用不动，避免误删
+    if (s.time > 0 && s.time < cutoff) {
+      try {
+        await git(['update-ref', '-d', s.ref])
+        count += 1
+      } catch {
+        /* 单个失败继续 */
+      }
+    }
+  }
+  return { ok: true, count }
+}
+
 /* ── 分支上游状态 ── */
 
 export async function branchStatus(repo) {

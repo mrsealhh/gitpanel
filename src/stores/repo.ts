@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from '../api/git'
 import { useSettingsStore } from './settings'
+import { explainGitError } from '../lib/gitErrors'
 import { recentList, recentPin, recentRemove, recentTouch, recentRename, cloneRepo, gitIdentity } from '../api/desktop'
 import type { RecentRepo } from '../api/desktop'
 import type {
@@ -42,6 +43,16 @@ export interface Notice {
 }
 
 let noticeTimer: number | undefined
+
+const LOG_KEY = 'gitpanel.logs'
+
+/** 一条操作/错误日志 */
+export interface LogEntry {
+  time: number
+  kind: 'ok' | 'err' | 'info'
+  summary: string
+  detail: string
+}
 
 /** 打开中的一个本地文件（编辑器标签） */
 export interface EditorTab {
@@ -131,6 +142,10 @@ export const useRepoStore = defineStore('repo', {
     notice: null as Notice | null,
     commandOutput: null as (CommandResult & { title: string }) | null,
     recents: [] as RecentRepo[],
+
+    // 操作 / 错误日志（可复盘）
+    logs: [] as LogEntry[],
+    logOpen: false,
 
     // 工作区 / 提交 / 同步
     status: null as WorktreeStatus | null,
@@ -235,6 +250,7 @@ export const useRepoStore = defineStore('repo', {
         this.info = await api.openRepo(path)
         this.path = this.info.path
         this.remember(this.info.path)
+        await this.maybeAutoPruneSnapshots()
         await this.reload()
         this.loadExtras()
         await this.refreshRebaseStatus()
@@ -706,11 +722,49 @@ export const useRepoStore = defineStore('repo', {
     },
 
     notify(kind: Notice['kind'], text: string) {
-      this.notice = { kind, text }
+      let display = text
+      let detail = ''
+      if (kind === 'err') {
+        const explained = explainGitError(text)
+        display = explained.summary
+        detail = `${explained.hint}\n\n—— 原始输出 ——\n${text}`
+      }
+      this.notice = { kind, text: display }
+      this.addLog(kind, display, detail || text)
       if (noticeTimer) window.clearTimeout(noticeTimer)
       noticeTimer = window.setTimeout(() => {
         this.notice = null
-      }, 3200)
+      }, kind === 'err' ? 6000 : 3200)
+    },
+
+    /* ── 操作 / 错误日志 ── */
+
+    addLog(kind: LogEntry['kind'], summary: string, detail: string) {
+      this.logs.unshift({ time: Date.now(), kind, summary, detail })
+      if (this.logs.length > 300) this.logs.length = 300
+      try {
+        localStorage.setItem(LOG_KEY, JSON.stringify(this.logs.slice(0, 200)))
+      } catch {
+        /* 存满或隐私模式失败可忽略 */
+      }
+    },
+
+    loadLogs() {
+      try {
+        const raw = localStorage.getItem(LOG_KEY)
+        if (raw) this.logs = JSON.parse(raw) as LogEntry[]
+      } catch {
+        this.logs = []
+      }
+    },
+
+    clearLogs() {
+      this.logs = []
+      try {
+        localStorage.removeItem(LOG_KEY)
+      } catch {
+        /* 忽略 */
+      }
     },
 
     async checkoutRef(ref: string) {
@@ -889,10 +943,35 @@ export const useRepoStore = defineStore('repo', {
 
     /* ─────────────── 安全网 ─────────────── */
 
+    /** 按设置自动清理超过保留天数的快照；默认关闭，失败不影响正常使用 */
+    async maybeAutoPruneSnapshots() {
+      const settings = useSettingsStore()
+      if (!this.path || !settings.snapshotAutoPrune) return
+      const days = Math.max(1, Math.floor(settings.snapshotRetentionDays || 30))
+      try {
+        const r = await api.pruneSnapshots(this.path, days)
+        if (r.count > 0) {
+          this.notify('info', `已自动清理 ${r.count} 个超过 ${days} 天的安全网快照`)
+        }
+      } catch {
+        // 自动清理失败（例如 git 临时被占用）不影响查看快照
+      }
+    },
+
+    /** 设置里的「立即清理」：不依赖自动清理开关，按指定天数执行一次 */
+    async pruneSnapshotsNow(days: number) {
+      if (!this.path) return 0
+      const keep = Math.max(1, Math.floor(days || 30))
+      const r = await api.pruneSnapshots(this.path, keep)
+      await this.loadSnapshots()
+      return r.count
+    },
+
     async loadSnapshots() {
       if (!this.path) return
       this.snapshotsLoading = true
       try {
+        await this.maybeAutoPruneSnapshots()
         this.snapshots = (await api.snapshots(this.path)).snapshots
       } catch {
         this.snapshots = []

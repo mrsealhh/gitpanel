@@ -10,6 +10,8 @@ const counts = computed(() => ({
   rows: repo.rows.length,
   plugins: repo.commands.length,
 }))
+
+const errCount = computed(() => repo.logs.filter((l) => l.kind === 'err').length)
 </script>
 
 <template>
@@ -28,6 +30,14 @@ const counts = computed(() => ({
 
     <span class="ml-auto">{{ counts.rows }} commits</span>
     <span v-if="counts.plugins">· {{ counts.plugins }} 个插件命令</span>
+    <button
+      class="rounded px-1.5 py-0.5 hover:bg-black/10"
+      :style="errCount ? { color: '#f87171' } : {}"
+      :title="errCount ? `${errCount} 个错误，点开查看原因和原始输出` : '操作日志'"
+      @click="repo.logOpen = true"
+    >
+      日志{{ errCount ? ` · ${errCount}` : '' }}
+    </button>
     <span v-if="repo.selected" class="font-mono">{{ repo.selected.short }}</span>
     <span>· {{ settings.themeLabel }}</span>
   </footer>

@@ -63,6 +63,13 @@ interface Persisted {
   diffMaxLines: number
   /** 大文件阈值（KB）：超过就提示「已按性能优先分段加载」 */
   diffLargeKB: number
+  /** 安全网自动清理旧快照：默认关闭，开启后删除超过保留天数的快照 */
+  snapshotAutoPrune: boolean
+  /** 安全网快照保留天数（默认 30 天） */
+  snapshotRetentionDays: number
+  /** 底部工作区面板：高度 / 是否展开 */
+  workDockHeight: number
+  workDockOpen: boolean
 }
 
 function load(): Persisted {
@@ -83,6 +90,10 @@ function load(): Persisted {
     showRight: true,
     diffMaxLines: 3000,
     diffLargeKB: 512,
+    snapshotAutoPrune: false,
+    snapshotRetentionDays: 30,
+    workDockHeight: 280,
+    workDockOpen: true,
   }
   try {
     return { ...fallback, ...JSON.parse(localStorage.getItem(KEY) || '{}') }
@@ -142,6 +153,10 @@ export const useSettingsStore = defineStore('settings', {
         showRight,
         diffMaxLines,
         diffLargeKB,
+        snapshotAutoPrune,
+        snapshotRetentionDays,
+        workDockHeight,
+        workDockOpen,
       } = this
       localStorage.setItem(
         KEY,
@@ -162,6 +177,10 @@ export const useSettingsStore = defineStore('settings', {
           showRight,
           diffMaxLines,
           diffLargeKB,
+          snapshotAutoPrune,
+          snapshotRetentionDays,
+          workDockHeight,
+          workDockOpen,
         }),
       )
     },
@@ -183,6 +202,10 @@ export const useSettingsStore = defineStore('settings', {
       this.showRight = true
       this.diffMaxLines = 3000
       this.diffLargeKB = 512
+      this.snapshotAutoPrune = false
+      this.snapshotRetentionDays = 30
+      this.workDockHeight = 280
+      this.workDockOpen = true
       this.applyTheme()
     },
   },

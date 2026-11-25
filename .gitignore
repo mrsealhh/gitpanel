@@ -12,7 +12,7 @@ dist
 dist-ssr
 *.local
 
-# Rust / Cargo (target dir is redirected to C:\cargo-target\gitpanel)
+# Rust / Cargo（target dir 默认在 target/；Windows 的 pnpm 脚本会重定向到 C:\cargo-target\gitpanel）
 target/
 Cargo.lock.bak
 

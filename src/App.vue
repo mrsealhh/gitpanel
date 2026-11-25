@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import CommandOutput from './components/CommandOutput.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import CommitList from './components/CommitList.vue'
@@ -17,6 +17,7 @@ import HealthModal from './components/HealthModal.vue'
 import ProjectSwitcher from './components/ProjectSwitcher.vue'
 import CompareList from './components/CompareList.vue'
 import HunkDialog from './components/HunkDialog.vue'
+import LogModal from './components/LogModal.vue'
 import WorktreeDialog from './components/WorktreeDialog.vue'
 import Icon from './components/Icon.vue'
 import IconButton from './components/IconButton.vue'
@@ -59,7 +60,7 @@ const pathInput = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
 const showPalette = ref(false)
 const showSettings = ref(false)
-const leftTab = ref<'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees'>('branches')
+const leftTab = ref<'branches' | 'stashes' | 'snapshots' | 'worktrees'>('branches')
 /** 右侧面板：变动详情 / 项目文件 */
 const rightTab = ref<'detail' | 'files'>('detail')
 const maximized = ref(false)
@@ -222,6 +223,29 @@ function closeActiveDoc() {
   return t
 })
 
+/** 底部工作区拖拽调高 */
+function startDockDrag(e: PointerEvent) {
+  e.preventDefault()
+  const startY = e.clientY
+  const startH = settings.workDockHeight
+  const onMove = (ev: PointerEvent) => {
+    const next = startH - (ev.clientY - startY)
+    settings.workDockHeight = Math.round(Math.min(window.innerHeight * 0.7, Math.max(140, next)))
+  }
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onUp)
+    settings.save()
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+}
+
+/** 内部客户端工具：禁用浏览器默认右键菜单，避免暴露「检查/另存为」这类入口 */
+function blockContextMenu(e: MouseEvent) {
+  e.preventDefault()
+}
+
 /* ── 面板宽度拖拽 ── */
 function startDrag(side: 'left' | 'right', e: PointerEvent) {
   e.preventDefault()
@@ -270,7 +294,7 @@ async function open() {
   await repo.open(pathInput.value)
   await repo.refreshStatus()
   const s = repo.status
-  if (s && !s.clean) leftTab.value = 'working'
+  if (s && !s.clean) settings.workDockOpen = true
   await repo.loadRecents()
 }
 
@@ -285,7 +309,15 @@ const changeCount = computed(() => {
   return s.staged.length + s.unstaged.length + s.untracked.length + s.conflicted.length
 })
 
-function switchTab(t: 'branches' | 'working' | 'stashes' | 'snapshots' | 'worktrees') {
+/** 左侧页签上的数字角标 */
+function tabBadge(t: 'branches' | 'stashes' | 'snapshots' | 'worktrees'): number {
+  if (t === 'stashes') return repo.stashes.length
+  if (t === 'worktrees') return repo.worktrees.length
+  if (t === 'snapshots') return repo.snapshots.length
+  return 0
+}
+
+function switchTab(t: 'branches' | 'stashes' | 'snapshots' | 'worktrees') {
   leftTab.value = t
   if (t === 'stashes') repo.loadStashes()
   if (t === 'worktrees') repo.loadWorktrees()
@@ -342,6 +374,7 @@ function onKey(e: KeyboardEvent) {
     else if (showClone.value) showClone.value = false
     else if (showDate.value) showDate.value = false
     else if (showHunks.value) showHunks.value = null
+    else if (repo.logOpen) repo.logOpen = false
     else if (repo.compareOpen) repo.closeCompare()
     else if (showWorktreeDialog.value) showWorktreeDialog.value = false
     else if (repo.commandOutput) repo.closeCommandOutput()
@@ -626,11 +659,24 @@ const noticeClass = computed(() => {
   }
 })
 
+/** 切分支时自动展开底部工作区，方便先看改动再操作 */
+watch(
+  () => repo.info?.branch,
+  (next, prev) => {
+    if (next && next !== prev) {
+      settings.workDockOpen = true
+      settings.save()
+    }
+  },
+)
+
 onMounted(async () => {
   settings.init()
   window.addEventListener('keydown', onKey)
+  window.addEventListener('contextmenu', blockContextMenu)
   document.addEventListener('mousedown', onDocMouseDown)
   void repo.loadRecents()
+  repo.loadLogs()
   maximized.value = await isMaximized()
 
   if (settings.autoCheckUpdate) {
@@ -665,6 +711,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
+  window.removeEventListener('contextmenu', blockContextMenu)
   document.removeEventListener('mousedown', onDocMouseDown)
 })
 </script>
@@ -811,10 +858,10 @@ onBeforeUnmount(() => {
       >
         <div class="flex h-8 shrink-0 items-center gap-px px-0.5" :style="{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }">
           <button
-            v-for="t in (['branches', 'working', 'stashes', 'snapshots', 'worktrees'] as const)"
+            v-for="t in (['branches', 'stashes', 'snapshots', 'worktrees'] as const)"
             :key="t"
-            class="relative flex h-8 flex-1 items-center justify-center whitespace-nowrap px-0.5 text-[10px] leading-none"
-            :title="t === 'branches' ? '分支' : t === 'working' ? `工作区${changeCount ? `（${changeCount} 项改动）` : ''}` : t === 'stashes' ? '储藏：git stash，把当前改动临时存起来' : t === 'snapshots' ? '安全网快照' : '工作树'"
+            class="relative flex h-8 flex-1 items-center justify-center gap-0.5 whitespace-nowrap px-0.5 text-[10px] leading-none"
+            :title="t === 'branches' ? '分支' : t === 'stashes' ? '储藏：git stash，把当前改动临时存起来' : t === 'snapshots' ? '安全网快照' : '工作树'"
             :style="
               leftTab === t
                 ? { color: 'var(--text)', boxShadow: 'inset 0 -2px 0 var(--accent)' }
@@ -822,12 +869,14 @@ onBeforeUnmount(() => {
             "
             @click="switchTab(t)"
           >
-            {{ t === 'branches' ? '分支' : t === 'working' ? '工作区' : t === 'stashes' ? '储藏' : t === 'snapshots' ? '安全网' : '工作树' }}
+            {{ t === 'branches' ? '分支' : t === 'stashes' ? '储藏' : t === 'snapshots' ? '安全网' : '工作树' }}
             <span
-              v-if="(t === 'working' && changeCount) || (t === 'stashes' && repo.stashes.length) || (t === 'worktrees' && repo.worktrees.length)"
-              class="absolute right-0.5 top-1 h-1 w-1 rounded-full"
-              :style="{ background: t === 'working' ? 'var(--accent)' : 'var(--text-mute)' }"
-            />
+              v-if="tabBadge(t)"
+              class="shrink-0 rounded-full px-1 text-[9px] leading-[14px]"
+              :style="{ background: 'var(--panel-3)', color: 'var(--text-mute)' }"
+            >
+              {{ tabBadge(t) }}
+            </span>
           </button>
         </div>
 
@@ -844,12 +893,6 @@ onBeforeUnmount(() => {
           @create-tag="openCreateTag()"
           @sync="repo.sync($event)"
           @compare="repo.openCompare($event, 'HEAD')"
-        />
-        <WorkingPanel
-          v-else-if="leftTab === 'working'"
-          class="min-h-0 flex-1"
-          @conflict="repo.openConflict($event)"
-          @hunks="showHunks = $event"
         />
         <StashPanel v-else-if="leftTab === 'stashes'" class="min-h-0 flex-1" @create="openCreateStash" />
         <WorktreePanel
@@ -985,6 +1028,39 @@ onBeforeUnmount(() => {
             @context="onCommitContext"
           />
         </div>
+
+        <!-- 底部工作区：可拖高度、可收起；切分支时自动展开 -->
+        <div
+          v-if="settings.workDockOpen"
+          class="flex shrink-0 flex-col"
+          :style="{ height: settings.workDockHeight + 'px', borderTop: '1px solid var(--border)' }"
+        >
+          <div class="dock-resizer" title="拖动调整高度" @pointerdown="startDockDrag($event)" />
+          <div class="flex h-7 shrink-0 items-center gap-2 px-3 text-[11px]" :style="{ background: 'var(--panel-2)' }">
+            <span class="font-medium t2">工作区</span>
+            <span class="t3">{{ changeCount }} 项改动</span>
+            <span class="text-[10px] t3">Ctrl 点击多选文件</span>
+            <button class="btn ml-auto px-2 py-0 text-[10px]" @click="settings.workDockOpen = false; settings.save()">
+              收起到托盘
+            </button>
+          </div>
+          <WorkingPanel
+            class="min-h-0 flex-1"
+            @conflict="repo.openConflict($event)"
+            @hunks="showHunks = $event"
+          />
+        </div>
+        <button
+          v-else
+          class="line-t flex h-7 shrink-0 items-center gap-2 px-3 text-[11px] t3"
+          :style="{ background: 'var(--panel-2)' }"
+          title="展开工作区"
+          @click="settings.workDockOpen = true; settings.save()"
+        >
+          <span class="font-medium t2">工作区</span>
+          <span>{{ changeCount }} 项改动</span>
+          <span class="ml-auto">展开 ▲</span>
+        </button>
       </div>
 
       <div v-if="settings.showRight" class="panel-resizer" @pointerdown="startDrag('right', $event)" />
@@ -1111,6 +1187,7 @@ onBeforeUnmount(() => {
       :staged="showHunks.staged"
       @close="showHunks = null"
     />
+    <LogModal v-if="repo.logOpen" @close="repo.logOpen = false" />
     <WorktreeDialog v-if="showWorktreeDialog" @close="showWorktreeDialog = false" />
     <CommandPalette
       v-if="showPalette"
@@ -1144,10 +1221,13 @@ onBeforeUnmount(() => {
     <transition name="fade">
       <div
         v-if="repo.notice"
-        class="fixed bottom-12 right-4 z-[60] rounded-lg px-3 py-2 text-[12px] shadow-lg"
+        class="fixed bottom-12 right-4 z-[60] max-w-[380px] cursor-pointer rounded-lg px-3 py-2 text-[12px] shadow-lg"
         :style="noticeClass"
+        :title="'点击查看操作日志与完整原因'"
+        @click="repo.logOpen = true"
       >
         {{ repo.notice.text }}
+        <span class="ml-1 opacity-70">›</span>
       </div>
     </transition>
   </div>
@@ -1187,6 +1267,17 @@ onBeforeUnmount(() => {
   transition: background 0.12s ease;
 }
 .panel-resizer:hover {
+  background: var(--accent-weak);
+}
+
+/* 底部工作区的拖拽手柄 */
+.dock-resizer {
+  flex: 0 0 4px;
+  height: 4px;
+  cursor: row-resize;
+  transition: background 0.12s ease;
+}
+.dock-resizer:hover {
   background: var(--accent-weak);
 }
 

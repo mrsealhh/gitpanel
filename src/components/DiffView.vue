@@ -169,13 +169,13 @@ onBeforeUnmount(() => {
 <template>
   <div class="flex h-full min-h-0 flex-col" :style="{ background: 'var(--bg)' }">
     <header class="line-b flex h-10 shrink-0 items-center gap-3 px-4" :style="{ background: 'var(--panel)' }">
-      <span class="truncate font-mono text-[12px] t2">{{ file }}</span>
-      <span v-if="diff && !diff.isBinary" class="shrink-0 text-[11px] t3">
+      <span class="min-w-0 flex-1 truncate font-mono text-[12px] t2" :title="file">{{ file }}</span>
+      <span v-if="diff && !diff.isBinary" class="shrink-0 whitespace-nowrap text-[11px] t3">
         已显示 {{ shownLines.old }} / {{ diff.oldTotalLines }} 行 · {{ sizeLabel }}
       </span>
       <span
         v-if="isLarge"
-        class="shrink-0 rounded px-1.5 py-0.5 text-[11px]"
+        class="shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px]"
         :style="{ background: 'var(--badge-tag-bg)', color: 'var(--badge-tag-fg)' }"
         title="超过大文件阈值，按性能优先分段加载，内容不会丢"
       >
@@ -183,17 +183,21 @@ onBeforeUnmount(() => {
       </span>
       <button
         v-if="diff?.hasMore"
-        class="btn shrink-0"
+        class="btn shrink-0 whitespace-nowrap"
         :disabled="loading"
         :title="`继续读取后面的内容（每段 ${settings.diffMaxLines || '不限'} 行）`"
         @click="emit('load-more')"
       >
         {{ loading ? '加载中…' : settings.diffMaxLines ? `继续加载 ${settings.diffMaxLines} 行` : '加载全部' }}
       </button>
-      <button class="btn ml-auto" :title="fullscreen ? '退出全屏' : '全屏查看'" @click="emit('toggle-fullscreen')">
+      <button
+        class="btn ml-auto shrink-0 whitespace-nowrap"
+        :title="fullscreen ? '退出全屏' : '全屏查看'"
+        @click="emit('toggle-fullscreen')"
+      >
         {{ fullscreen ? '退出全屏' : '全屏' }}
       </button>
-      <button class="btn" @click="emit('close')">关闭 (Esc)</button>
+      <button class="btn shrink-0 whitespace-nowrap" @click="emit('close')">关闭 (Esc)</button>
     </header>
 
     <div v-if="loading" class="p-6 text-sm t3">加载文件内容…</div>
@@ -204,23 +208,33 @@ onBeforeUnmount(() => {
 </template>
 
 <style>
+/* 让并排 diff 真正可滚动：外层定高、每侧独立滚动，横竖都能滚 */
 .cm-mergeView {
   height: 100%;
+  max-height: 100%;
+  overflow: hidden;
 }
 .cm-mergeView .cm-mergeViewEditors {
   height: 100%;
+  max-height: 100%;
   display: flex;
+  overflow: hidden;
 }
 .cm-mergeView .cm-mergeViewEditor {
   height: 100%;
+  max-height: 100%;
   flex: 1 1 0;
   min-width: 0;
+  overflow: hidden;
 }
 .cm-mergeView .cm-editor {
   height: 100%;
+  max-height: 100%;
 }
 .cm-mergeView .cm-scroller {
-  overflow: auto;
+  height: 100%;
+  max-height: 100%;
+  overflow: auto !important;
 }
 .cm-mergeView .cm-mergeViewEditor:first-child {
   border-right: 1px solid var(--border);

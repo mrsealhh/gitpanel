@@ -25,17 +25,20 @@ const hostTriple =
     .trim() || ''
 const triple = process.env.TAURI_TARGET_TRIPLE || hostTriple || 'x86_64-pc-windows-msvc'
 
+// 与 scripts/with-cargo-target.mjs 保持一致：Windows 用 C 盘 SSD，其它平台用默认 target/
+const targetDir = process.env.CARGO_TARGET_DIR || (isWin ? 'C:/cargo-target/gitpanel' : 'target')
+
 const build = spawnSync('cargo', ['build', '--release', '-p', 'gitpanel-mcp'], {
   cwd: root,
   stdio: 'inherit',
   shell: isWin,
+  env: { ...process.env, CARGO_TARGET_DIR: targetDir },
 })
 if (build.status !== 0) {
   console.error('[prepare-mcp] cargo build 失败，跳过打包 MCP 服务端')
   process.exit(1)
 }
 
-const targetDir = process.env.CARGO_TARGET_DIR || (isWin ? 'C:/cargo-target/gitpanel' : 'target')
 const src = path.resolve(root, targetDir, 'release', `gitpanel-mcp${ext}`)
 if (!existsSync(src)) {
   console.error(`[prepare-mcp] 找不到 ${src}`)

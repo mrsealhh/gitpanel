@@ -130,6 +130,7 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
             json!({ "ok": true })
         }
         "delete-all-snapshots" => json!({ "ok": true, "count": repo.delete_all_snapshots()? }),
+        "prune-snapshots" => json!({ "ok": true, "count": repo.prune_snapshots(n(&p, "days", 30))? }),
 
         "branch-status" => json!({ "branches": repo.branch_status()? }),
         "delete-remote-branch" => json!({

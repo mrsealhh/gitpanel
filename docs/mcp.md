@@ -11,7 +11,8 @@
 
 ```powershell
 cargo build --release -p gitpanel-mcp
-# 产物：C:\cargo-target\gitpanel\release\gitpanel-mcp.exe（约 2 MB，单文件，无依赖）
+# 产物：<target-dir>/release/gitpanel-mcp.exe（约 2 MB，单文件，无依赖）
+# 默认 target-dir 是 target/；Windows 上通过 pnpm 脚本构建时是 C:\cargo-target\gitpanel
 ```
 
 ## 2. 配置客户端

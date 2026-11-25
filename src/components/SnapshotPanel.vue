@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useRepoStore } from '../stores/repo'
-import { relativeTime } from '../utils/time'
+import { formatDate } from '../utils/time'
 const repo = useRepoStore()
 
 onMounted(() => {
@@ -55,6 +55,7 @@ async function reset(oid: string, mode: 'soft' | 'mixed' | 'hard') {
     <div class="min-h-0 flex-1 overflow-y-auto">
       <div class="px-3 py-2 text-[11px] leading-relaxed t3">
         丢弃、合并、拉取、回滚等操作前会自动打快照，随时能回到操作前。
+        <div class="mt-1">旧快照可在「设置 → 安全网」开启自动清理（默认关闭，保留 30 天）。</div>
         <div class="mt-1.5 space-y-0.5">
           <div><span class="rounded px-1" :style="{ background: 'var(--panel-3)' }">软</span> 只移动分支指针，改动全部保留在暂存区</div>
           <div><span class="rounded px-1" :style="{ background: 'var(--panel-3)' }">混</span> 移动指针并清空暂存区，工作区文件改动保留</div>
@@ -71,7 +72,7 @@ async function reset(oid: string, mode: 'soft' | 'mixed' | 'hard') {
               {{ s.label }}
             </span>
             <span class="font-mono text-[10px] t3">{{ s.short }}</span>
-            <span class="ml-auto shrink-0 text-[10px] t3">{{ relativeTime(s.time) }}</span>
+            <span class="ml-auto shrink-0 text-[10px] t3">{{ formatDate(s.time) }}</span>
           </div>
           <div class="mt-0.5 truncate text-[11px] t3">{{ s.subject }}</div>
         </div>
@@ -98,7 +99,7 @@ async function reset(oid: string, mode: 'soft' | 'mixed' | 'hard') {
         </div>
         <div class="mt-0.5 flex items-center gap-1">
           <span class="truncate font-mono text-[10px] t3">{{ e.selector }}</span>
-          <span class="shrink-0 text-[10px] t3">· {{ relativeTime(e.time) }}</span>
+          <span class="shrink-0 text-[10px] t3">· {{ formatDate(e.time) }}</span>
           <div class="ml-auto flex shrink-0 gap-1">
             <button class="btn px-1.5 py-0 text-[10px]" title="只移动 HEAD，改动保留在暂存区" @click="reset(e.oid, 'soft')">软</button>
             <button class="btn px-1.5 py-0 text-[10px]" title="重置暂存区，工作区改动保留" @click="reset(e.oid, 'mixed')">混</button>

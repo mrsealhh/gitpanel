@@ -272,6 +272,11 @@ export const api = {
     return post<{ ok: boolean; count: number }>('/api/delete-all-snapshots', { path })
   },
 
+  /** 自动清理早于 days 天的安全网快照 */
+  pruneSnapshots(path: string, days: number): Promise<{ ok: boolean; count: number }> {
+    return post<{ ok: boolean; count: number }>('/api/prune-snapshots', { path, days })
+  },
+
   /* ── hunk 级操作 / 跨提交对比 ── */
 
   fileHunks(path: string, file: string, staged: boolean): Promise<FileHunks> {

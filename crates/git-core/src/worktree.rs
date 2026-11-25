@@ -1331,6 +1331,27 @@ impl Repo {
         Ok(n)
     }
 
+    /// 自动清理早于 `days` 天的安全网快照（默认由前端设置决定是否启用）
+    pub fn prune_snapshots(&self, days: u32) -> Result<usize> {
+        if days == 0 {
+            bail!("保留天数必须大于 0");
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let cutoff = now.saturating_sub(days as i64 * 86_400);
+        let all = self.list_snapshots()?;
+        let mut n = 0;
+        for s in all {
+            // 没有解析出创建时间的旧引用不动，避免误删
+            if s.time > 0 && s.time < cutoff && self.delete_snapshot(&s.r#ref).is_ok() {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
     pub fn merge_branch(&self, name: &str) -> Result<MergeResult> {
         if !crate::actions::valid_ref(name) {
             bail!("非法的分支名");

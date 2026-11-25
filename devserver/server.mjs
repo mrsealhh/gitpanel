@@ -450,6 +450,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/delete-all-snapshots') {
       return send(res, 200, await ops.deleteAllSnapshots(body.path))
     }
+    if (url.pathname === '/api/prune-snapshots') {
+      return send(res, 200, await ops.pruneSnapshots(body.path, body.days))
+    }
     if (url.pathname === '/api/branch-status') {
       return send(res, 200, await ops.branchStatus(body.path))
     }

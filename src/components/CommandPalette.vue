@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRepoStore } from '../stores/repo'
 import { THEME_LABELS, useSettingsStore } from '../stores/settings'
 import type { ThemeId } from '../stores/settings'
+import { formatDate } from '../utils/time'
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -43,7 +44,7 @@ const items = computed<Item[]>(() => {
       id: 'stash-create',
       title: '新建储藏 (stash)',
       group: '仓库',
-      run: () => repo.createStash(`wip ${new Date().toLocaleString()}`),
+      run: () => repo.createStash(`wip ${formatDate(Date.now() / 1000)}`),
     },
     {
       id: 'stash-pop',
