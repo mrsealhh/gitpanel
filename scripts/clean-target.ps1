@@ -5,13 +5,15 @@ param([switch]$Clean)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$configPath = Join-Path $root '.cargo/config.toml'
-$targetDir = 'C:\cargo-target\gitpanel'
 
-if (Test-Path $configPath) {
-    $line = Select-String -Path $configPath -Pattern 'target-dir\s*=\s*"([^"]+)"' | Select-Object -First 1
-    if ($line) { $targetDir = $line.Matches[0].Groups[1].Value }
+$targetDir = $env:CARGO_TARGET_DIR
+if (-not $targetDir) {
+    # 与 scripts/with-cargo-target.mjs 保持一致：Windows 用 C 盘 SSD，其它平台用默认 target/
+    if ($env:OS -eq 'Windows_NT') { $targetDir = 'C:\cargo-target\gitpanel' }
+    else { $targetDir = Join-Path $root 'target' }
 }
+# 让下面的 cargo clean 也作用于同一个目录
+$env:CARGO_TARGET_DIR = $targetDir
 
 if (Test-Path $targetDir) {
     $size = (Get-ChildItem $targetDir -Recurse -File -ErrorAction SilentlyContinue |

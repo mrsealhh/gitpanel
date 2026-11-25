@@ -10,14 +10,14 @@
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
-    "rust:check": "cargo check --workspace",
-    "rust:test": "cargo test -p git-core",
-    "rust:probe": "cargo run -p perf-probe --",
+    "rust:check": "node scripts/with-cargo-target.mjs cargo check --workspace",
+    "rust:test": "node scripts/with-cargo-target.mjs cargo test -p git-core",
+    "rust:probe": "node scripts/with-cargo-target.mjs cargo run -p perf-probe --",
     "rust:size": "powershell -ExecutionPolicy Bypass -File scripts/clean-target.ps1",
     "rust:clean": "powershell -ExecutionPolicy Bypass -File scripts/clean-target.ps1 -Clean",
-    "desktop:dev": "tauri dev",
-    "desktop:build": "tauri build",
-    "desktop:exe": "tauri build --no-bundle"
+    "desktop:dev": "node scripts/with-cargo-target.mjs tauri dev",
+    "desktop:build": "node scripts/with-cargo-target.mjs tauri build",
+    "desktop:exe": "node scripts/with-cargo-target.mjs tauri build --no-bundle"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

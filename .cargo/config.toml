@@ -1,7 +1,7 @@
-# 本项目编译产物统一输出到 C 盘 SSD，绕开机械盘的随机小文件读写瓶颈。
-# Cargo 会从当前目录向上查找 .cargo/config.toml，因此 src-tauri 也自动生效。
-[build]
-target-dir = "C:/cargo-target/gitpanel"
+# 编译产物目录由 scripts/with-cargo-target.mjs 按平台决定：
+# - Windows 本机开发重定向到 C 盘 SSD，绕开机械盘的随机小文件读写瓶颈
+# - macOS / Linux 保持 Cargo 默认的 target/，避免把 C:/... 当成相对路径
+# 这里不写死 target-dir，直接 cargo 命令在任何平台都能正常编译。
 
 # 国内网络下用系统 git 拉取依赖，比内置 libgit2 更稳（支持代理与凭据）
 [net]
