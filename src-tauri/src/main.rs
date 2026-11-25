@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -255,7 +256,7 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
         /* ── 本地文件的查看 / 编辑（省去开别的编辑器） ── */
         "fs-list" => fs_list(repo.path(), &s(&p, "dir"))?,
         "fs-files" => repo_files(repo.path())?,
-        "fs-grep" => fs_grep(repo.path(), &s(&p, "query"), n(&p, "max", 300))?,        "fs-read" => fs_read(repo.path(), &s(&p, "file"), n(&p, "maxBytes", 2 * 1024 * 1024))?,
+        "fs-grep" => fs_grep(repo.path(), &s(&p, "query"), n(&p, "max", 300))?,        "fs-read" => fs_read(repo.path(), &s(&p, "file"), n(&p, "maxBytes", 2 * 1024 * 1024), n(&p, "offset", 0) as u64)?,
         "fs-write" => fs_write(repo.path(), &s(&p, "file"), &s(&p, "content"))?,
 
         other => return Err(anyhow!("未知命令: {other}")),
@@ -399,24 +400,69 @@ fn detect_encoding(bytes: &[u8]) -> (&'static str, bool) {
     }
 }
 
-fn fs_read(root: &std::path::Path, file: &str, max_bytes: u32) -> Result<Value> {
+fn fs_read(root: &std::path::Path, file: &str, max_bytes: u32, offset: u64) -> Result<Value> {
     let target = safe_join(root, file)?;
-    if !target.is_file() {
+    let meta = std::fs::metadata(&target)?;
+    if !meta.is_file() {
         return Err(anyhow!("不是文件：{file}"));
     }
-    let bytes = std::fs::read(&target)?;
-    let size = bytes.len() as u64;
-    let is_binary = bytes.iter().take(8000).any(|b| *b == 0);
-    let (encoding, editable) = detect_encoding(&bytes);
-    let max = max_bytes as usize;
-    let truncated = bytes.len() > max;
-    let slice = &bytes[..bytes.len().min(max)];
+    let size = meta.len();
+    let mut f = std::fs::File::open(&target)?;
+
+    // 只用文件头判断二进制，避免为了探测把大文件整个读进来
+    let mut head = [0u8; 8000];
+    let head_n = f.read(&mut head)?;
+    let is_binary = head[..head_n].contains(&0);
+
+    let start = offset.min(size);
+    f.seek(SeekFrom::Start(start))?;
+    let remaining = size.saturating_sub(start);
+    let want = if max_bytes == 0 {
+        remaining
+    } else {
+        (max_bytes as u64).min(remaining)
+    };
+    let mut buf = vec![0u8; want as usize];
+    let mut read = 0usize;
+    while read < buf.len() {
+        let n = f.read(&mut buf[read..])?;
+        if n == 0 {
+            break;
+        }
+        read += n;
+    }
+    buf.truncate(read);
+
+    // 尽量在换行处切块；没有换行时至少不要切断 UTF-8 字符
+    let eof = start + (read as u64) >= size;
+    let mut end = buf.len();
+    if !eof {
+        if let Some(pos) = buf.iter().rposition(|b| *b == b'\n') {
+            end = pos + 1;
+        } else if let Err(e) = std::str::from_utf8(&buf[..end]) {
+            if e.valid_up_to() > 0 {
+                end = e.valid_up_to();
+            }
+        }
+        // 极端编码下 valid_up_to 可能为 0：至少前进一个块，避免死循环
+        if end == 0 {
+            end = buf.len();
+        }
+    }
+    let slice = &buf[..end];
+    let (encoding, valid_utf8) = detect_encoding(slice);
+    let has_more = !is_binary && start + (end as u64) < size;
+    let next_offset = if is_binary { size } else { start + (end as u64) };
 
     let content = if is_binary {
         String::new()
     } else {
         let text = String::from_utf8_lossy(slice).to_string();
-        text.strip_prefix('\u{feff}').map(|s| s.to_string()).unwrap_or(text)
+        if start == 0 {
+            text.strip_prefix('\u{feff}').map(|s| s.to_string()).unwrap_or(text)
+        } else {
+            text
+        }
     };
     let lines = if content.is_empty() { 0 } else { content.lines().count() };
 
@@ -425,9 +471,12 @@ fn fs_read(root: &std::path::Path, file: &str, max_bytes: u32) -> Result<Value> 
         "content": content,
         "size": size,
         "isBinary": is_binary,
-        "truncated": truncated,
+        "truncated": has_more,
+        "offset": start,
+        "nextOffset": next_offset,
+        "hasMore": has_more,
         "encoding": encoding,
-        "editable": editable && !is_binary && !truncated,
+        "editable": valid_utf8 && !is_binary && !has_more,
         "lines": lines,
     }))
 }

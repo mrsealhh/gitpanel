@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRepoStore } from '../stores/repo'
+import { useSettingsStore } from '../stores/settings'
 import { formatDate } from '../utils/time'
 import { copyText } from '../lib/clipboard'
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 const repo = useRepoStore()
+const settings = useSettingsStore()
 
 const filter = ref<'all' | 'err'>('all')
 const opened = ref<Set<number>>(new Set())
@@ -54,6 +56,9 @@ async function copyAll() {
       <header class="line-b flex items-center gap-2 px-4 py-2.5">
         <span class="text-[13px] font-medium t1">操作日志</span>
         <span class="text-[11px] t3">{{ repo.logs.length }} 条 · {{ errCount }} 个错误</span>
+        <span class="text-[10px] t3">
+          {{ settings.logAutoPrune ? `自动保留 ${settings.logRetentionDays} 天` : '不自动清理' }}
+        </span>
         <div class="ml-3 flex items-center gap-1">
           <button
             class="btn px-2 py-0 text-[10px]"

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { ref } from 'vue'
 import type {
   BlameLine,
   BranchStatus,
@@ -44,20 +45,28 @@ const BASE = (import.meta.env.VITE_API as string | undefined) ?? 'http://127.0.0
 /** 桌面态判定：Tauri 会注入 __TAURI_INTERNALS__ */
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
-async function post<T>(path: string, payload: Record<string, unknown>): Promise<T> {
-  // 桌面态：一个通用 RPC 入口，cmd 与 /api/<cmd> 同名，payload 同构
-  if (isTauri) {
-    return invoke<T>('git_call', { cmd: path.replace('/api/', ''), payload })
-  }
+/** 正在进行中的后端调用数：耗时操作统一在状态栏显示 loading */
+export const apiBusy = ref(0)
 
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error((data as { error?: string }).error || `HTTP ${res.status}`)
-  return data as T
+async function post<T>(path: string, payload: Record<string, unknown>): Promise<T> {
+  apiBusy.value++
+  try {
+    // 桌面态：一个通用 RPC 入口，cmd 与 /api/<cmd> 同名，payload 同构
+    if (isTauri) {
+      return await invoke<T>('git_call', { cmd: path.replace('/api/', ''), payload })
+    }
+
+    const res = await fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error((data as { error?: string }).error || `HTTP ${res.status}`)
+    return data as T
+  } finally {
+    apiBusy.value = Math.max(0, apiBusy.value - 1)
+  }
 }
 
 export const api = {
@@ -394,8 +403,8 @@ export const api = {
     )
   },
 
-  fsRead(path: string, file: string, maxBytes = 2 * 1024 * 1024): Promise<FileText> {
-    return post<FileText>('/api/fs-read', { path, file, maxBytes })
+  fsRead(path: string, file: string, maxBytes = 512 * 1024, offset = 0): Promise<FileText> {
+    return post<FileText>('/api/fs-read', { path, file, maxBytes, offset })
   },
 
   fsWrite(

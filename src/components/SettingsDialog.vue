@@ -46,6 +46,20 @@ function saveRetention() {
   toast(`安全网保留天数：${settings.snapshotRetentionDays} 天`)
 }
 
+function saveLogRetention() {
+  settings.logRetentionDays = Math.max(1, Math.floor(Number(settings.logRetentionDays) || 30))
+  settings.save()
+  toast(`日志保留天数：${settings.logRetentionDays} 天`)
+}
+
+function pruneLogsNow() {
+  const days = Math.max(1, Math.floor(Number(settings.logRetentionDays) || 30))
+  settings.logRetentionDays = days
+  settings.save()
+  const n = repo.pruneLogsNow(days)
+  toast(n ? `已清理 ${n} 条超过 ${days} 天的操作日志` : `没有超过 ${days} 天的操作日志`, n ? 'ok' : 'info')
+}
+
 async function pruneNow() {
   if (!repo.path) {
     toast('先打开一个仓库，再清理安全网快照', 'err')
@@ -220,6 +234,37 @@ const updateStatus = computed(() => {  switch (update.phase) {
           </div>
           <p class="mt-1 text-[11px] leading-relaxed t3">
             开启后，打开仓库或查看安全网时会自动删除超过保留天数的快照；关闭时不会自动删除任何快照。
+          </p>
+        </section>
+
+        <section class="mb-6">
+          <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">操作日志</h3>
+          <label class="flex cursor-pointer items-center justify-between py-1.5">
+            <span class="text-[12px] t2">自动清理旧日志（默认关闭）</span>
+            <input
+              v-model="settings.logAutoPrune"
+              type="checkbox"
+              class="h-4 w-4 accent-[var(--accent)]"
+              @change="saveToggle('操作日志自动清理', settings.logAutoPrune)"
+            />
+          </label>
+          <div class="flex items-center justify-between py-1.5">
+            <span class="text-[12px] t2">保留天数</span>
+            <div class="flex items-center gap-2">
+              <input
+                v-model.number="settings.logRetentionDays"
+                type="number"
+                min="1"
+                step="1"
+                class="field w-[72px] px-2 py-1 text-right text-[12px]"
+                @change="saveLogRetention"
+              />
+              <span class="text-[11px] t3">天</span>
+              <button class="btn px-2 py-1 text-[11px]" @click="pruneLogsNow">立即清理一次</button>
+            </div>
+          </div>
+          <p class="mt-1 text-[11px] leading-relaxed t3">
+            开启后，启动应用或打开「操作日志」时会自动删除超过保留天数的日志；关闭时不会自动删除任何日志。
           </p>
         </section>
 

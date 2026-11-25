@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useRepoStore } from '../stores/repo'
 import { useSettingsStore } from '../stores/settings'
+import IconButton from './IconButton.vue'
 import type { StatusFile } from '../api/types'
 
 const emit = defineEmits<{ (e: 'conflict', file: string): void; (e: 'hunks', payload: { file: string; staged: boolean }): void }>()
@@ -126,7 +127,7 @@ function rowStyle(zone: Zone, path: string) {
         已选 {{ selectedCount }}
         <button class="ml-1 underline" @click="clearSelection">取消选择</button>
       </span>
-      <button class="btn ml-auto px-2 py-0 text-[10px]" @click="repo.refreshStatus()">刷新</button>
+      <IconButton class="ml-auto" compact name="refresh" title="刷新工作区" :size="13" @click="repo.refreshStatus()" />
     </div>
 
     <!-- 待推送 / 待拉取：直接在这里推拉 -->
@@ -138,9 +139,9 @@ function rowStyle(zone: Zone, path: string) {
       <span v-if="repo.status?.ahead" :style="{ color: 'var(--accent)' }">↑{{ repo.status.ahead }} 待推送</span>
       <span v-if="repo.status?.behind" class="t3">↓{{ repo.status.behind }} 待拉取</span>
       <div class="ml-auto flex shrink-0 items-center gap-1">
-        <button class="btn px-2 py-0 text-[10px]" :disabled="!!repo.syncing" @click="repo.sync('fetch')">抓取</button>
-        <button class="btn px-2 py-0 text-[10px]" :disabled="!!repo.syncing" @click="repo.sync('pull')">拉取</button>
-        <button class="btn btn-primary px-2 py-0 text-[10px]" :disabled="!!repo.syncing" @click="repo.sync('push')">推送</button>
+        <IconButton compact name="fetch" title="抓取（fetch）" :size="13" :disabled="!!repo.syncing" @click="repo.sync('fetch')" />
+        <IconButton compact name="pull" title="拉取（pull）" :size="13" :disabled="!!repo.syncing" @click="repo.sync('pull')" />
+        <IconButton compact name="push" title="推送（push）" :size="13" :disabled="!!repo.syncing" @click="repo.sync('push')" />
       </div>
     </div>
 
@@ -190,12 +191,12 @@ function rowStyle(zone: Zone, path: string) {
         <section v-if="st.staged.length">
           <div class="flex items-center gap-1 px-3 pb-1 pt-2 text-[11px] font-medium t3">
             已暂存 <span class="opacity-70">{{ st.staged.length }}</span>
-            <span class="ml-auto flex items-center gap-2">
+            <span class="ml-auto flex items-center gap-1">
               <template v-if="picked('staged', st.staged).length">
                 <span class="text-[10px]" :style="{ color: 'var(--accent)' }">已选 {{ picked('staged', st.staged).length }}</span>
-                <button class="text-[10px] accent hover:underline" @click="batch('staged', 'unstage')">取消暂存所选</button>
+                <IconButton compact name="minus" title="取消暂存所选" :size="12" @click="batch('staged', 'unstage')" />
               </template>
-              <button class="text-[10px] accent hover:underline" @click="repo.unstage(st.staged)">全部取消</button>
+              <IconButton compact name="minus" title="全部取消暂存" :size="12" @click="repo.unstage(st.staged)" />
             </span>
           </div>
           <div
@@ -207,8 +208,8 @@ function rowStyle(zone: Zone, path: string) {
           >
             <span class="w-3 shrink-0 font-mono text-[10px]" :style="{ color: statusColor(f.status) }">{{ f.status }}</span>
             <span class="min-w-0 flex-1 truncate font-mono t1">{{ f.path }}</span>
-            <button class="shrink-0 text-[10px] t3 opacity-0 hover:accent group-hover:opacity-100" title="按 diff 块取消暂存" @click.stop="emit('hunks', { file: f.path, staged: true })">分块</button>
-            <button class="shrink-0 text-[10px] t3 opacity-0 hover:accent group-hover:opacity-100" @click.stop="repo.unstage([f])">取消暂存</button>
+            <IconButton compact class="opacity-0 group-hover:opacity-100" name="blocks" title="按 diff 块取消暂存" :size="12" @click.stop="emit('hunks', { file: f.path, staged: true })" />
+            <IconButton compact class="opacity-0 group-hover:opacity-100" name="minus" title="取消暂存这个文件" :size="12" @click.stop="repo.unstage([f])" />
           </div>
         </section>
 
@@ -216,13 +217,13 @@ function rowStyle(zone: Zone, path: string) {
         <section v-if="st.unstaged.length">
           <div class="flex items-center gap-1 px-3 pb-1 pt-2 text-[11px] font-medium t3">
             未暂存 <span class="opacity-70">{{ st.unstaged.length }}</span>
-            <span class="ml-auto flex items-center gap-2">
+            <span class="ml-auto flex items-center gap-1">
               <template v-if="picked('unstaged', st.unstaged).length">
                 <span class="text-[10px]" :style="{ color: 'var(--accent)' }">已选 {{ picked('unstaged', st.unstaged).length }}</span>
-                <button class="text-[10px] accent hover:underline" @click="batch('unstaged', 'stage')">暂存所选</button>
-                <button class="text-[10px] hover:underline" style="color: #f87171" @click="batch('unstaged', 'discard')">丢弃所选</button>
+                <IconButton compact name="plus" title="暂存所选" :size="12" @click="batch('unstaged', 'stage')" />
+                <IconButton compact name="undo" title="丢弃所选改动" danger :size="12" @click="batch('unstaged', 'discard')" />
               </template>
-              <button class="text-[10px] accent hover:underline" @click="repo.stage(st.unstaged)">全部暂存</button>
+              <IconButton compact name="plus" title="全部暂存" :size="12" @click="repo.stage(st.unstaged)" />
             </span>
           </div>
           <div
@@ -234,9 +235,9 @@ function rowStyle(zone: Zone, path: string) {
           >
             <span class="w-3 shrink-0 font-mono text-[10px]" :style="{ color: statusColor(f.status) }">{{ f.status }}</span>
             <span class="min-w-0 flex-1 truncate font-mono t1">{{ f.path }}</span>
-            <button class="shrink-0 text-[10px] accent opacity-60 hover:opacity-100" @click.stop="repo.stage([f])">暂存</button>
-            <button class="shrink-0 text-[10px] t3 opacity-60 hover:opacity-100" title="按 diff 块暂存 / 丢弃" @click.stop="emit('hunks', { file: f.path, staged: false })">分块</button>
-            <button class="shrink-0 text-[10px] text-rose-400 opacity-60 hover:opacity-100" @click.stop="discardOne(f)">丢弃</button>
+            <IconButton compact class="opacity-60 hover:opacity-100" name="plus" title="暂存这个文件" :size="12" @click.stop="repo.stage([f])" />
+            <IconButton compact class="opacity-60 hover:opacity-100" name="blocks" title="按 diff 块暂存 / 丢弃" :size="12" @click.stop="emit('hunks', { file: f.path, staged: false })" />
+            <IconButton compact class="opacity-60 hover:opacity-100" name="undo" title="丢弃这个文件的改动" danger :size="12" @click.stop="discardOne(f)" />
           </div>
         </section>
 
@@ -244,13 +245,13 @@ function rowStyle(zone: Zone, path: string) {
         <section v-if="st.untracked.length">
           <div class="flex items-center gap-1 px-3 pb-1 pt-2 text-[11px] font-medium t3">
             未跟踪 <span class="opacity-70">{{ st.untracked.length }}</span>
-            <span class="ml-auto flex items-center gap-2">
+            <span class="ml-auto flex items-center gap-1">
               <template v-if="picked('untracked', st.untracked).length">
                 <span class="text-[10px]" :style="{ color: 'var(--accent)' }">已选 {{ picked('untracked', st.untracked).length }}</span>
-                <button class="text-[10px] accent hover:underline" @click="batch('untracked', 'stage')">暂存所选</button>
-                <button class="text-[10px] hover:underline" style="color: #f87171" @click="batch('untracked', 'delete')">删除所选</button>
+                <IconButton compact name="plus" title="暂存所选" :size="12" @click="batch('untracked', 'stage')" />
+                <IconButton compact name="trash" title="删除所选未跟踪文件" danger :size="12" @click="batch('untracked', 'delete')" />
               </template>
-              <button class="text-[10px] accent hover:underline" @click="repo.stage(st.untracked)">全部暂存</button>
+              <IconButton compact name="plus" title="全部暂存" :size="12" @click="repo.stage(st.untracked)" />
             </span>
           </div>
           <div
@@ -262,8 +263,8 @@ function rowStyle(zone: Zone, path: string) {
           >
             <span class="w-3 shrink-0 font-mono text-[10px]" style="color: var(--badge-head-fg)">U</span>
             <span class="min-w-0 flex-1 truncate font-mono t2">{{ f.path }}</span>
-            <button class="shrink-0 text-[10px] accent opacity-60 hover:opacity-100" @click.stop="repo.stage([f])">暂存</button>
-            <button class="shrink-0 text-[10px] text-rose-400 opacity-60 hover:opacity-100" @click.stop="discardOne(f, true)">删除</button>
+            <IconButton compact class="opacity-60 hover:opacity-100" name="plus" title="暂存这个文件" :size="12" @click.stop="repo.stage([f])" />
+            <IconButton compact class="opacity-60 hover:opacity-100" name="trash" title="删除这个未跟踪文件" danger :size="12" @click.stop="discardOne(f, true)" />
           </div>
         </section>
       </template>

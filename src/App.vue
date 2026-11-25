@@ -61,8 +61,9 @@ const searchInput = ref<HTMLInputElement | null>(null)
 const showPalette = ref(false)
 const showSettings = ref(false)
 const leftTab = ref<'branches' | 'stashes' | 'snapshots' | 'worktrees'>('branches')
-/** 右侧面板：变动详情 / 项目文件 */
-const rightTab = ref<'detail' | 'files'>('detail')
+/** 右侧面板：变动详情 / 项目文件；变动详情默认不显示，点提交行才出现，可关闭 */
+const rightTab = ref<'detail' | 'files'>('files')
+const detailTabOpen = ref(false)
 const maximized = ref(false)
 const diffFullscreen = ref(false)
 const showWorktreeDialog = ref(false)
@@ -291,6 +292,8 @@ const prompt = ref<PromptSpec | null>(null)
 
 async function open() {
   if (!pathInput.value.trim()) return
+  detailTabOpen.value = false
+  rightTab.value = 'files'
   await repo.open(pathInput.value)
   await repo.refreshStatus()
   const s = repo.status
@@ -389,14 +392,32 @@ function onKey(e: KeyboardEvent) {
 
   if (e.key === 'ArrowDown') {
     e.preventDefault()
+    openDetailTab()
     repo.selectOffset(1)
   } else if (e.key === 'ArrowUp') {
     e.preventDefault()
+    openDetailTab()
     repo.selectOffset(-1)
   } else if (e.key === 'Enter' && repo.detail?.files.length) {
     e.preventDefault()
     repo.openFileDiff(repo.detail.files[0].path)
   }
+}
+
+/** 变动详情改成按需出现的动态标签：点提交行 / 用方向键切换时才打开 */
+function openDetailTab() {
+  detailTabOpen.value = true
+  rightTab.value = 'detail'
+}
+
+function closeDetailTab() {
+  detailTabOpen.value = false
+  if (rightTab.value === 'detail') rightTab.value = 'files'
+}
+
+function onSelectCommit(row: CommitRow) {
+  openDetailTab()
+  repo.select(row)
 }
 
 /* ── 提交右键菜单 ── */
@@ -478,27 +499,47 @@ function onCommitContext({ row, x, y }: { row: CommitRow; x: number; y: number }
 }
 
 /* ── 分支/标签右键菜单 ── */
+function onCheckoutRef(name: string) {
+  void repo.checkoutRef(name)
+}
+
+function onDeleteRemoteBranch(name: string) {
+  if (settings.confirmDangerous && !window.confirm(`确定删除远端分支 ${name}？\n会执行 git push --delete，远端分支将消失。`)) return
+  void repo.deleteRemoteBranch(name)
+}
+
 function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
   const isTag = ref.kind === 'tag'
+  const isRemote = ref.kind === 'remote'
   const items: MenuItem[] = isTag
     ? [
         { id: 'delete-tag', label: '删除标签', danger: true },
         { id: 'copy-name', label: '复制名称' },
       ]
-    : [
-        { id: 'checkout', label: '检出此分支' },
-        { id: 'merge', label: '合并到当前分支' },
-        { id: 'rebase-onto', label: '交互式 rebase 到此分支' },
-        { id: 'divider', label: '', divider: true },
-        { id: 'fetch', label: '抓取所有远端（fetch）' },
-        { id: 'pull', label: '拉取当前分支（pull）' },
-        { id: 'push', label: '推送当前分支（push）' },
-        { id: 'divider3', label: '', divider: true },
-        { id: 'rename', label: '重命名…' },
-        { id: 'delete', label: '删除分支', danger: true },
-        { id: 'divider2', label: '', divider: true },
-        { id: 'copy-name', label: '复制名称' },
-      ]
+    : isRemote
+      ? [
+          { id: 'checkout', label: '签出为本地分支（自动跟踪）' },
+          { id: 'compare', label: '与当前 HEAD 对比' },
+          { id: 'divider', label: '', divider: true },
+          { id: 'fetch', label: '抓取所有远端（fetch）' },
+          { id: 'delete-remote', label: '删除远端分支…', danger: true },
+          { id: 'divider2', label: '', divider: true },
+          { id: 'copy-name', label: '复制名称' },
+        ]
+      : [
+          { id: 'checkout', label: '检出此分支' },
+          { id: 'merge', label: '合并到当前分支' },
+          { id: 'rebase-onto', label: '交互式 rebase 到此分支' },
+          { id: 'divider', label: '', divider: true },
+          { id: 'fetch', label: '抓取所有远端（fetch）' },
+          { id: 'pull', label: '拉取当前分支（pull）' },
+          { id: 'push', label: '推送当前分支（push）' },
+          { id: 'divider3', label: '', divider: true },
+          { id: 'rename', label: '重命名…' },
+          { id: 'delete', label: '删除分支', danger: true },
+          { id: 'divider2', label: '', divider: true },
+          { id: 'copy-name', label: '复制名称' },
+        ]
 
   menu.value = {
     x,
@@ -506,7 +547,11 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
     items,
     handler: async (id) => {
       if (id === 'checkout') await repo.checkoutRef(ref.name)
-      else if (id === 'merge') await repo.mergeBranch(ref.name)
+      else if (id === 'compare') await repo.openCompare(ref.name, 'HEAD')
+      else if (id === 'delete-remote') {
+        if (settings.confirmDangerous && !window.confirm(`确定删除远端分支 ${ref.name}？\n会执行 git push --delete。`)) return
+        await repo.deleteRemoteBranch(ref.name)
+      } else if (id === 'merge') await repo.mergeBranch(ref.name)
       else if (id === 'rebase-onto') await repo.openRebase(ref.name)
       else if (id === 'fetch') await repo.sync('fetch')
       else if (id === 'pull') await repo.sync('pull')
@@ -541,28 +586,77 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
 }
 
 /* ── 文件右键菜单 ── */
-function onFileContext({ file, x, y }: { file: string; x: number; y: number }) {
+function absRepoPath(file: string) {
+  const base = (repo.path || '').replace(/[\\/]+$/, '')
+  const rel = file.replace(/\\/g, '/').replace(/^\/+/, '')
+  return rel ? `${base}/${rel}` : base
+}
+
+function absDirPath(file: string, isDir = false) {
+  const rel = file.replace(/\\/g, '/')
+  if (isDir) return absRepoPath(rel)
+  const i = rel.lastIndexOf('/')
+  return absRepoPath(i >= 0 ? rel.slice(0, i) : '')
+}
+
+async function copyLabeledPath(text: string, label: string) {
+  const ok = await copyText(text)
+  repo.notify(ok ? 'ok' : 'err', ok ? `已复制${label}` : '复制失败')
+}
+
+function onFileContext({ file, x, y, isDir = false }: { file: string; x: number; y: number; isDir?: boolean }) {
+  const items: MenuItem[] = isDir
+    ? [
+        { id: 'copy-abs', label: '复制目录路径' },
+        { id: 'copy-rel', label: '复制相对路径' },
+      ]
+    : [
+        { id: 'diff', label: '查看并排 Diff' },
+        { id: 'history', label: '文件历史' },
+        { id: 'blame', label: 'Blame（逐行归属）' },
+        { id: 'divider', label: '', divider: true },
+        { id: 'copy-rel', label: '复制文件路径（相对）' },
+        { id: 'copy-abs', label: '复制绝对路径' },
+        { id: 'copy-dir', label: '复制目录路径' },
+        { id: 'divider2', label: '', divider: true },
+        { id: 'ignore', label: '忽略此文件（加入 .gitignore）' },
+      ]
+
   menu.value = {
     x,
     y,
-    items: [
-      { id: 'diff', label: '查看并排 Diff' },
-      { id: 'history', label: '文件历史' },
-      { id: 'blame', label: 'Blame（逐行归属）' },
-      { id: 'divider', label: '', divider: true },
-      { id: 'copy', label: '复制路径' },
-      { id: 'ignore', label: '忽略此文件（加入 .gitignore）' },
-    ],
+    items,
     handler: async (id) => {
       if (id === 'diff') await repo.openFileDiff(file)
       else if (id === 'history') await repo.openFileHistory(file)
       else if (id === 'blame') await repo.openBlame(file)
-      else if (id === 'copy') {
-        const ok = await copyText(file)
-        repo.notify(ok ? 'ok' : 'err', ok ? '已复制路径' : '复制失败')
-      } else if (id === 'ignore') {
-        await repo.ignoreFile(file)
-      }
+      else if (id === 'copy-rel') await copyLabeledPath(file, isDir ? '目录路径' : '文件路径')
+      else if (id === 'copy-abs') await copyLabeledPath(absRepoPath(file), isDir ? '目录路径' : '绝对路径')
+      else if (id === 'copy-dir') await copyLabeledPath(absDirPath(file), '目录路径')
+      else if (id === 'ignore') await repo.ignoreFile(file)
+    },
+  }
+}
+
+/** 文档标签右键：复制路径 / 绝对路径 / 目录路径 */
+function onTabContext(e: MouseEvent, tab: { key: string; title: string }) {
+  e.preventDefault()
+  const file = tab.title
+  menu.value = {
+    x: e.clientX,
+    y: e.clientY,
+    items: [
+      { id: 'copy-rel', label: '复制文件路径（相对）' },
+      { id: 'copy-abs', label: '复制绝对路径' },
+      { id: 'copy-dir', label: '复制目录路径' },
+      { id: 'divider', label: '', divider: true },
+      { id: 'close', label: '关闭这个标签' },
+    ],
+    handler: async (id) => {
+      if (id === 'copy-rel') await copyLabeledPath(file, '文件路径')
+      else if (id === 'copy-abs') await copyLabeledPath(absRepoPath(file), '绝对路径')
+      else if (id === 'copy-dir') await copyLabeledPath(absDirPath(file), '目录路径')
+      else if (id === 'close') closeTab(tab.key)
     },
   }
 }
@@ -742,10 +836,20 @@ onBeforeUnmount(() => {
           <input
             ref="searchInput"
             v-model="repo.search"
-            class="field w-full py-1 pl-7 pr-2 text-[12px]"
+            class="field w-full py-1 pl-7 pr-7 text-[12px]"
             placeholder="搜索提交 / 作者"
           />
-          <span class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] t3">⌕</span>
+          <span class="pointer-events-none absolute left-2 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center text-[11px] t3">
+            <Icon name="search" :size="13" />
+          </span>
+          <button
+            v-if="repo.search"
+            class="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded t3 hover:bg-[var(--hover)] hover:opacity-100"
+            title="清除搜索"
+            @click="repo.search = ''; searchInput?.focus()"
+          >
+            <Icon name="close" :size="13" />
+          </button>
         </div>
         <span ref="dateBtn" class="shrink-0">
           <IconButton
@@ -893,6 +997,8 @@ onBeforeUnmount(() => {
           @create-tag="openCreateTag()"
           @sync="repo.sync($event)"
           @compare="repo.openCompare($event, 'HEAD')"
+          @checkout="onCheckoutRef"
+          @delete-remote="onDeleteRemoteBranch"
         />
         <StashPanel v-else-if="leftTab === 'stashes'" class="min-h-0 flex-1" @create="openCreateStash" />
         <WorktreePanel
@@ -926,6 +1032,7 @@ onBeforeUnmount(() => {
             "
             :title="t.title"
             @click="repo.activeTab = t.key"
+            @contextmenu.prevent="onTabContext($event, t)"
           >
             <span class="shrink-0 text-[9px] opacity-70">{{ t.kind === 'file' ? '◻' : '±' }}</span>
             <span class="max-w-[170px] truncate">{{ t.label }}</span>
@@ -934,9 +1041,14 @@ onBeforeUnmount(() => {
               ✕
             </button>
           </div>
-          <button class="ml-auto shrink-0 px-2 text-[10px] t3 hover:opacity-100" @click="repo.closeAllDocs()">
-            全部关闭
-          </button>
+          <IconButton
+            class="ml-auto shrink-0"
+            compact
+            name="close"
+            title="关闭全部文档"
+            :size="13"
+            @click="repo.closeAllDocs()"
+          />
         </div>
 
         <FileEditor
@@ -953,10 +1065,14 @@ onBeforeUnmount(() => {
           :size="activeEditorTab.size"
           :lines="activeEditorTab.lines"
           :truncated="activeEditorTab.truncated"
+          :has-more="activeEditorTab.hasMore"
+          :loading-more="activeEditorTab.loadingMore"
+          :loaded-bytes="activeEditorTab.offset"
           @change="repo.updateEditorContent(activeEditorTab.file, $event)"
           @save="repo.saveEditor(activeEditorTab.file)"
           @reload="repo.reloadEditor(activeEditorTab.file)"
           @close="closeActiveDoc()"
+          @load-more="repo.loadMoreEditor()"
         />
         <div
           v-else-if="activeDiffTab"
@@ -1023,7 +1139,7 @@ onBeforeUnmount(() => {
             :rows="repo.filteredRows"
             :selected-oid="repo.selected?.oid"
             :loading="repo.loading"
-            @select="repo.select($event)"
+            @select="onSelectCommit"
             @load-more="repo.loadMore()"
             @context="onCommitContext"
           />
@@ -1040,9 +1156,14 @@ onBeforeUnmount(() => {
             <span class="font-medium t2">工作区</span>
             <span class="t3">{{ changeCount }} 项改动</span>
             <span class="text-[10px] t3">Ctrl 点击多选文件</span>
-            <button class="btn ml-auto px-2 py-0 text-[10px]" @click="settings.workDockOpen = false; settings.save()">
-              收起到托盘
-            </button>
+            <IconButton
+              class="ml-auto"
+              compact
+              name="collapse"
+              title="收起工作区（最小化到底部）"
+              :size="14"
+              @click="settings.workDockOpen = false; settings.save()"
+            />
           </div>
           <WorkingPanel
             class="min-h-0 flex-1"
@@ -1059,7 +1180,7 @@ onBeforeUnmount(() => {
         >
           <span class="font-medium t2">工作区</span>
           <span>{{ changeCount }} 项改动</span>
-          <span class="ml-auto">展开 ▲</span>
+          <Icon name="expand" :size="14" class="ml-auto" />
         </button>
       </div>
 
@@ -1074,18 +1195,36 @@ onBeforeUnmount(() => {
           :style="{ background: 'var(--panel)', borderBottom: '1px solid var(--border)' }"
         >
           <button
-            v-for="t in (['detail', 'files'] as const)"
-            :key="t"
-            class="relative flex h-8 flex-1 items-center justify-center whitespace-nowrap text-[10px] leading-none"
-            :title="t === 'detail' ? '当前提交的变动详情' : '项目文件（可直接查看 / 编辑）'"
+            v-if="detailTabOpen"
+            class="group relative flex h-8 flex-1 items-center justify-center gap-1 whitespace-nowrap text-[10px] leading-none"
+            title="当前提交的变动详情（可关闭）"
             :style="
-              rightTab === t
+              rightTab === 'detail'
                 ? { color: 'var(--text)', boxShadow: 'inset 0 -2px 0 var(--accent)' }
                 : { color: 'var(--text-mute)' }
             "
-            @click="rightTab = t"
+            @click="rightTab = 'detail'"
           >
-            {{ t === 'detail' ? '变动详情' : '文件' }}
+            变动详情
+            <span
+              class="rounded px-1 text-[10px] leading-[14px] opacity-0 transition group-hover:opacity-60 hover:bg-[var(--hover)] hover:opacity-100"
+              title="关闭变动详情"
+              @click.stop="closeDetailTab"
+            >
+              ✕
+            </span>
+          </button>
+          <button
+            class="relative flex h-8 flex-1 items-center justify-center whitespace-nowrap text-[10px] leading-none"
+            title="项目文件（可直接查看 / 编辑）"
+            :style="
+              rightTab === 'files'
+                ? { color: 'var(--text)', boxShadow: 'inset 0 -2px 0 var(--accent)' }
+                : { color: 'var(--text-mute)' }
+            "
+            @click="rightTab = 'files'"
+          >
+            文件
           </button>
         </div>
 
@@ -1097,7 +1236,7 @@ onBeforeUnmount(() => {
           @open-file="repo.openFileDiff($event)"
           @file-context="onFileContext"
         />
-        <FilePanel v-else class="min-h-0 flex-1" />
+        <FilePanel v-else class="min-h-0 flex-1" @file-context="onFileContext" />
       </div>
     </main>
 

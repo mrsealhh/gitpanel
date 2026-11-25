@@ -9,6 +9,7 @@ import type { Extension } from '@codemirror/state'
 import { languageFor } from '../lib/lang'
 import { useSettingsStore } from '../stores/settings'
 import Icon from './Icon.vue'
+import IconButton from './IconButton.vue'
 
 const props = defineProps<{
   file: string
@@ -21,6 +22,9 @@ const props = defineProps<{
   size?: number
   lines?: number
   truncated?: boolean
+  hasMore?: boolean
+  loadingMore?: boolean
+  loadedBytes?: number
 }>()
 
 const emit = defineEmits<{
@@ -28,12 +32,15 @@ const emit = defineEmits<{
   (e: 'save'): void
   (e: 'reload'): void
   (e: 'close'): void
+  (e: 'load-more'): void
 }>()
 
 const settings = useSettingsStore()
 const host = ref<HTMLElement | null>(null)
 let view: EditorView | null = null
 let seq = 0
+let removeScroll: (() => void) | null = null
+let streamArmed = true
 
 /* ── 文件内搜索（Ctrl+F） ── */
 const searchOpen = ref(false)
@@ -145,10 +152,34 @@ const sizeLabel = computed(() => {
   return `${(b / 1024 / 1024).toFixed(1)} MB`
 })
 
+const loadedLabel = computed(() => {
+  const b = props.loadedBytes ?? 0
+  if (b < 1024) return `${b} B`
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
+  return `${(b / 1024 / 1024).toFixed(1)} MB`
+})
+
 function destroy() {
+  removeScroll?.()
+  removeScroll = null
   view?.destroy()
   view = null
   if (host.value) host.value.innerHTML = ''
+}
+
+/** 大文件预览：滚动到接近底部时自动续读下一段 */
+function attachStream() {
+  const el = view?.scrollDOM
+  if (!el) return
+  const onScroll = () => {
+    if (!props.hasMore || props.loadingMore || !streamArmed) return
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 420) {
+      streamArmed = false
+      emit('load-more')
+    }
+  }
+  el.addEventListener('scroll', onScroll, { passive: true })
+  removeScroll = () => el.removeEventListener('scroll', onScroll)
 }
 
 async function build() {
@@ -156,6 +187,7 @@ async function build() {
   const mine = ++seq
   const lang = await languageFor(props.file)
   if (mine !== seq || !host.value) return
+  const prevTop = view?.scrollDOM.scrollTop ?? 0
   destroy()
 
   const readOnly = props.editable === false
@@ -207,13 +239,27 @@ async function build() {
     }),
     parent: host.value,
   })
+  attachStream()
+  if (prevTop > 0) {
+    requestAnimationFrame(() => {
+      if (view) view.scrollDOM.scrollTop = prevTop
+    })
+  }
 }
 
-watch(() => [props.file, settings.theme, props.loading], build)
+watch(() => [props.file, settings.theme, props.editable], build)
+
+watch(
+  () => props.loadingMore,
+  (v) => {
+    if (!v) streamArmed = true
+  },
+)
 
 /**
- * 内容从外面变了（刚读完文件 / 点了重新加载 / 保存成功）时同步进编辑器。
+ * 内容从外面变了（刚读完文件 / 点了重新加载 / 保存成功 / 滚动续读）时同步进编辑器。
  * 自己敲字时 props.content 会跟着变，此时 doc 已经等于它，不会重建。
+ * 续读是在末尾追加，只插入新增部分，保留滚动位置。
  */
 watch(
   () => props.content,
@@ -222,7 +268,12 @@ watch(
       build()
       return
     }
-    if (view.state.doc.toString() === next) return
+    const old = view.state.doc.toString()
+    if (old === next) return
+    if (next.startsWith(old) && next.length > old.length) {
+      view.dispatch({ changes: { from: old.length, insert: next.slice(old.length) } })
+      return
+    }
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: next },
     })
@@ -244,24 +295,29 @@ onBeforeUnmount(() => {
       <span v-if="dirty" class="shrink-0 rounded px-1.5 text-[10px]" :style="{ background: 'var(--accent-weak)', color: 'var(--accent)' }">
         未保存
       </span>
-      <span class="shrink-0 text-[11px] t3">{{ lines ?? 0 }} 行 · {{ sizeLabel }}</span>
+      <span v-if="hasMore" class="shrink-0 text-[11px] t3">
+        已加载 {{ loadedLabel }} / {{ sizeLabel }} · 滚动继续
+      </span>
+      <span v-else class="shrink-0 text-[11px] t3">{{ lines ?? 0 }} 行 · {{ sizeLabel }}</span>
+      <span v-if="loadingMore" class="inline-flex shrink-0 items-center gap-1 text-[11px]" :style="{ color: 'var(--accent)' }">
+        <span class="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-current border-r-transparent" />
+        加载中…
+      </span>
 
       <span class="ml-auto flex shrink-0 items-center gap-1">
         <span v-if="editable === false" class="mr-1 text-[10px] t3">
-          {{ encoding !== 'utf8' && encoding !== 'utf8bom' ? '非 UTF-8，只读' : '过大，只读预览' }}
+          {{ encoding !== 'utf8' && encoding !== 'utf8bom' ? '非 UTF-8，只读' : hasMore ? '分段加载中，读完可编辑' : '过大，只读预览' }}
         </span>
-        <button class="btn" title="在文件内搜索 (Ctrl+F)" @click="openSearch">搜索</button>
-        <button class="btn" :disabled="loading" @click="emit('reload')">重新加载</button>
-        <button
-          class="btn btn-primary"
+        <IconButton name="search" title="在文件内搜索 (Ctrl+F)" @click="openSearch" />
+        <IconButton name="refresh" title="重新加载" :disabled="loading" @click="emit('reload')" />
+        <IconButton
+          name="save"
+          :title="saving ? '保存中…' : '保存 (Ctrl+S)'"
+          :active="!!dirty && editable !== false"
           :disabled="!editable || !dirty || saving"
-          :style="!editable || !dirty ? { opacity: 0.5 } : {}"
-          title="保存 (Ctrl+S)"
           @click="emit('save')"
-        >
-          {{ saving ? '保存中…' : '保存' }}
-        </button>
-        <button class="btn" @click="emit('close')">关闭 (Esc)</button>
+        />
+        <IconButton name="close" title="关闭 (Esc)" @click="emit('close')" />
       </span>
     </header>
 
@@ -279,9 +335,9 @@ onBeforeUnmount(() => {
       <span class="shrink-0 text-[11px] t3">
         {{ matchCount ? `${matchIndex + 1} / ${matchCount}` : query ? '无匹配' : '' }}
       </span>
-      <button class="btn px-2 py-0 text-[10px]" @click="step(-1)">上一个</button>
-      <button class="btn px-2 py-0 text-[10px]" @click="step(1)">下一个</button>
-      <button class="btn ml-auto px-2 py-0 text-[10px]" @click="closeSearch">关闭</button>
+      <IconButton compact name="chevron-up" title="上一个匹配" :size="13" @click="step(-1)" />
+      <IconButton compact name="chevron-down" title="下一个匹配" :size="13" @click="step(1)" />
+      <IconButton class="ml-auto" compact name="close" title="关闭搜索" :size="13" @click="closeSearch" />
     </div>
 
     <div v-if="loading" class="p-6 text-sm t3">加载文件…</div>

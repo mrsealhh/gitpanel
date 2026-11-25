@@ -8,6 +8,7 @@ import { tags } from '@lezer/highlight'
 import type { Extension } from '@codemirror/state'
 import type { FileDiff } from '../api/types'
 import { useSettingsStore } from '../stores/settings'
+import IconButton from './IconButton.vue'
 import { languageFor as loadLanguage } from '../lib/lang'
 
 const props = defineProps<{
@@ -29,6 +30,10 @@ const settings = useSettingsStore()
 const host = ref<HTMLElement | null>(null)
 let view: MergeView | null = null
 let seq = 0
+/** 两侧滚动同步的清理函数（重建/关闭时调用） */
+let removeScrollSync: (() => void) | null = null
+/** 大文件 Diff 自动续读：避免滚动到底部时重复触发 */
+let autoStreamArmed = true
 
 /** 当前两版各显示了多少行（用于「已显示 x / y 行」） */
 const shownLines = computed(() => ({
@@ -121,10 +126,66 @@ async function languageFor(file: string): Promise<Extension> {
 }
 
 function destroy() {
+  removeScrollSync?.()
+  removeScrollSync = null
   view?.destroy()
   view = null
   if (host.value) host.value.innerHTML = ''
 }
+
+/**
+ * 并排 Diff 两侧滚动同步：
+ * - 只响应用户滚动（isTrusted），程序化设置 scrollTop 不会再触发另一侧，避免抖动
+ * - 纵向按比例同步，两边增删行数不同也能一起滚到底
+ * - 横向按像素对齐，方便看同一列的长行
+ */
+function attachScrollSync(merge: MergeView) {
+  const a = merge.a.scrollDOM
+  const b = merge.b.scrollDOM
+  autoStreamArmed = true
+
+  const sync = (from: HTMLElement, to: HTMLElement) => {
+    const fromMax = from.scrollHeight - from.clientHeight
+    const toMax = to.scrollHeight - to.clientHeight
+    const ratio = fromMax > 0 ? from.scrollTop / fromMax : 0
+    to.scrollTop = ratio * Math.max(0, toMax)
+    to.scrollLeft = from.scrollLeft
+  }
+
+  /** 接近底部时自动接下一段，用户不用再点「继续加载」 */
+  const maybeAutoLoad = (el: HTMLElement) => {
+    if (!props.diff?.hasMore || props.loading || !autoStreamArmed) return
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 420) {
+      autoStreamArmed = false
+      emit('load-more')
+    }
+  }
+
+  const onA = (e: Event) => {
+    if (!e.isTrusted) return
+    sync(a, b)
+    maybeAutoLoad(a)
+  }
+  const onB = (e: Event) => {
+    if (!e.isTrusted) return
+    sync(b, a)
+    maybeAutoLoad(b)
+  }
+
+  a.addEventListener('scroll', onA, { passive: true })
+  b.addEventListener('scroll', onB, { passive: true })
+  removeScrollSync = () => {
+    a.removeEventListener('scroll', onA)
+    b.removeEventListener('scroll', onB)
+  }
+}
+
+watch(
+  () => props.loading,
+  (v) => {
+    if (!v) autoStreamArmed = true
+  },
+)
 
 async function build() {
   if (!host.value || !props.diff || props.diff.isBinary) {
@@ -149,6 +210,7 @@ async function build() {
     highlightChanges: true,
     gutter: true,
   })
+  attachScrollSync(view)
   if (prevScrollTop > 0) {
     requestAnimationFrame(() => {
       host.value?.querySelectorAll('.cm-scroller').forEach((el) => {
@@ -185,19 +247,20 @@ onBeforeUnmount(() => {
         v-if="diff?.hasMore"
         class="btn shrink-0 whitespace-nowrap"
         :disabled="loading"
-        :title="`继续读取后面的内容（每段 ${settings.diffMaxLines || '不限'} 行）`"
+        :title="`滚动到底部会自动继续读取（每段 ${settings.diffMaxLines || '不限'} 行）`"
         @click="emit('load-more')"
       >
         {{ loading ? '加载中…' : settings.diffMaxLines ? `继续加载 ${settings.diffMaxLines} 行` : '加载全部' }}
       </button>
-      <button
-        class="btn ml-auto shrink-0 whitespace-nowrap"
-        :title="fullscreen ? '退出全屏' : '全屏查看'"
-        @click="emit('toggle-fullscreen')"
-      >
-        {{ fullscreen ? '退出全屏' : '全屏' }}
-      </button>
-      <button class="btn shrink-0 whitespace-nowrap" @click="emit('close')">关闭 (Esc)</button>
+      <div class="ml-auto flex shrink-0 items-center gap-1">
+        <IconButton
+          name="maximize"
+          :title="fullscreen ? '退出全屏' : '全屏查看'"
+          :active="!!fullscreen"
+          @click="emit('toggle-fullscreen')"
+        />
+        <IconButton name="close" title="关闭 (Esc)" @click="emit('close')" />
+      </div>
     </header>
 
     <div v-if="loading" class="p-6 text-sm t3">加载文件内容…</div>

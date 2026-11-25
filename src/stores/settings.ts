@@ -67,6 +67,10 @@ interface Persisted {
   snapshotAutoPrune: boolean
   /** 安全网快照保留天数（默认 30 天） */
   snapshotRetentionDays: number
+  /** 操作日志自动清理：默认关闭，开启后删除超过保留天数的日志 */
+  logAutoPrune: boolean
+  /** 操作日志保留天数（默认 30 天） */
+  logRetentionDays: number
   /** 底部工作区面板：高度 / 是否展开 */
   workDockHeight: number
   workDockOpen: boolean
@@ -92,6 +96,8 @@ function load(): Persisted {
     diffLargeKB: 512,
     snapshotAutoPrune: false,
     snapshotRetentionDays: 30,
+    logAutoPrune: false,
+    logRetentionDays: 30,
     workDockHeight: 280,
     workDockOpen: true,
   }
@@ -155,6 +161,8 @@ export const useSettingsStore = defineStore('settings', {
         diffLargeKB,
         snapshotAutoPrune,
         snapshotRetentionDays,
+        logAutoPrune,
+        logRetentionDays,
         workDockHeight,
         workDockOpen,
       } = this
@@ -179,6 +187,8 @@ export const useSettingsStore = defineStore('settings', {
           diffLargeKB,
           snapshotAutoPrune,
           snapshotRetentionDays,
+          logAutoPrune,
+          logRetentionDays,
           workDockHeight,
           workDockOpen,
         }),
@@ -204,6 +214,8 @@ export const useSettingsStore = defineStore('settings', {
       this.diffLargeKB = 512
       this.snapshotAutoPrune = false
       this.snapshotRetentionDays = 30
+      this.logAutoPrune = false
+      this.logRetentionDays = 30
       this.workDockHeight = 280
       this.workDockOpen = true
       this.applyTheme()

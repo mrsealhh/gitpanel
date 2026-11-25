@@ -56,13 +56,13 @@ async function evaluate(expression) {
 
 await send('Page.enable')
 await send('Runtime.enable')
+await send('Emulation.setDeviceMetricsOverride', {
+  width: 1680,
+  height: 1000,
+  deviceScaleFactor: 1,
+  mobile: false,
+})
 if (url !== '-') {
-  await send('Emulation.setDeviceMetricsOverride', {
-    width: 1680,
-    height: 1000,
-    deviceScaleFactor: 1,
-    mobile: false,
-  })
   await send('Page.navigate', { url })
   await sleep(2600)
 }

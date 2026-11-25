@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useRepoStore } from '../stores/repo'
+import IconButton from './IconButton.vue'
 import { relativeTime } from '../utils/time'
 
 const emit = defineEmits<{ (e: 'create'): void }>()
@@ -14,8 +15,8 @@ onMounted(() => repo.loadStashes())
     <div class="line-b flex items-center px-3 py-2">
       <span class="text-[12px] font-semibold t1">储藏</span>
       <span class="ml-2 text-[11px] t3">{{ repo.stashes.length }}</span>
-      <button class="btn ml-auto px-2 py-0.5 text-[11px]" title="把当前工作区改动收进 stash" @click="emit('create')">新建</button>
-      <button class="btn ml-1 px-2 py-0.5 text-[11px]" @click="repo.loadStashes()">刷新</button>
+      <IconButton class="ml-auto" compact name="plus" title="新建储藏（git stash）" :size="13" @click="emit('create')" />
+      <IconButton class="ml-1" compact name="refresh" title="刷新储藏" :size="13" @click="repo.loadStashes()" />
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto">
@@ -38,16 +39,10 @@ onMounted(() => repo.loadStashes())
         </div>
         <div class="mt-0.5 truncate text-[12px] t1">{{ s.message || '(无描述)' }}</div>
         <div class="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100">
-          <button class="btn px-1.5 py-0 text-[10px]" @click="repo.stashAction(s.ref, 'apply')">应用</button>
-          <button class="btn px-1.5 py-0 text-[10px]" @click="repo.stashAction(s.ref, 'pop')">弹出</button>
-          <button class="btn px-1.5 py-0 text-[10px]" @click="repo.openStashDiff(s.ref)">查看</button>
-          <button
-            class="btn px-1.5 py-0 text-[10px]"
-            style="color: #f87171"
-            @click="repo.stashAction(s.ref, 'drop')"
-          >
-            删除
-          </button>
+          <IconButton compact name="download" title="应用这个储藏（保留记录）" :size="12" @click="repo.stashAction(s.ref, 'apply')" />
+          <IconButton compact name="push" title="弹出这个储藏（应用后删除）" :size="12" @click="repo.stashAction(s.ref, 'pop')" />
+          <IconButton compact name="eye" title="查看储藏内容" :size="12" @click="repo.openStashDiff(s.ref)" />
+          <IconButton compact name="trash" title="删除这个储藏" danger :size="12" @click="repo.stashAction(s.ref, 'drop')" />
         </div>
       </div>
     </div>

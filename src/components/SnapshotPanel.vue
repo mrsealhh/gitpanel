@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useRepoStore } from '../stores/repo'
+import IconButton from './IconButton.vue'
 import { formatDate } from '../utils/time'
 const repo = useRepoStore()
 
@@ -40,16 +41,17 @@ async function reset(oid: string, mode: 'soft' | 'mixed' | 'hard') {
     <div class="line-b flex items-center px-3 py-2">
       <span class="text-[12px] font-semibold t1">安全网</span>
       <span class="ml-2 text-[11px] t3">{{ repo.snapshots.length }} 个快照</span>
-      <button
+      <IconButton
         v-if="repo.snapshots.length"
-        class="btn ml-auto px-2 py-0.5 text-[11px]"
-        style="color: #f87171"
-        title="彻底删除所有安全网快照，释放引用"
+        class="ml-auto"
+        compact
+        name="trash"
+        title="彻底删除所有安全网快照"
+        danger
+        :size="13"
         @click="purgeAll"
-      >
-        清空
-      </button>
-      <button class="btn ml-1 px-2 py-0.5 text-[11px]" @click="repo.loadSnapshots(); repo.loadReflog()">刷新</button>
+      />
+      <IconButton class="ml-1" compact name="refresh" title="刷新安全网 / reflog" :size="13" @click="repo.loadSnapshots(); repo.loadReflog()" />
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto">
@@ -76,15 +78,8 @@ async function reset(oid: string, mode: 'soft' | 'mixed' | 'hard') {
           </div>
           <div class="mt-0.5 truncate text-[11px] t3">{{ s.subject }}</div>
         </div>
-        <button class="btn shrink-0 px-2 py-0.5 text-[10px]" @click="restore(s.ref)">回滚</button>
-        <button
-          class="btn shrink-0 px-1.5 py-0.5 text-[10px]"
-          style="color: #f87171"
-          title="彻底删除这个快照"
-          @click="removeOne(s.ref)"
-        >
-          删除
-        </button>
+        <IconButton compact name="undo" title="回滚到这个快照" :size="12" @click="restore(s.ref)" />
+        <IconButton compact name="trash" title="彻底删除这个快照" danger :size="12" @click="removeOne(s.ref)" />
       </div>
 
       <div class="line-t mx-3 my-2" />

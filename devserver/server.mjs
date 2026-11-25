@@ -557,7 +557,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await ops.fsGrep(body.path, body.query, body.max))
     }
     if (url.pathname === '/api/fs-read') {
-      return send(res, 200, await ops.fsRead(body.path, body.file, body.maxBytes))
+      return send(res, 200, await ops.fsRead(body.path, body.file, body.maxBytes, body.offset))
     }
     if (url.pathname === '/api/fs-write') {
       return send(res, 200, await ops.fsWrite(body.path, body.file, body.content))

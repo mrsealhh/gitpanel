@@ -9,8 +9,9 @@ withDefaults(
     active?: boolean
     disabled?: boolean
     danger?: boolean
+    compact?: boolean
   }>(),
-  { size: 16, active: false, disabled: false, danger: false },
+  { size: 16, active: false, disabled: false, danger: false, compact: false },
 )
 
 const emit = defineEmits<{ (e: 'click', ev: MouseEvent): void }>()
@@ -22,7 +23,7 @@ const emit = defineEmits<{ (e: 'click', ev: MouseEvent): void }>()
     :aria-label="title"
     :disabled="disabled"
     class="icon-btn"
-    :class="{ 'is-active': active, 'is-danger': danger }"
+    :class="{ 'is-active': active, 'is-danger': danger, 'is-compact': compact }"
     @click="emit('click', $event)"
   >
     <Icon :name="name" :size="size" />
@@ -57,5 +58,10 @@ const emit = defineEmits<{ (e: 'click', ev: MouseEvent): void }>()
 .icon-btn.is-danger:hover:not(:disabled) {
   color: #f87171;
   background: rgba(248, 113, 113, 0.12);
+}
+.icon-btn.is-compact {
+  width: 22px;
+  height: 20px;
+  border-radius: 5px;
 }
 </style>

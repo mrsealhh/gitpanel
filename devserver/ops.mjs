@@ -3,6 +3,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { isUtf8 } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { spawnSync } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -286,15 +287,45 @@ export async function branchStatus(repo) {
 export async function deleteRemoteBranch(repo, name) {
   if (!name || name.startsWith('-')) throw new Error('非法的分支名')
   const git = makeGit(repo)
-  let upstream = ''
+
+  // 支持两种入参：远端分支 origin/feat/x，或本地分支 feat/x（按它的上游推断）
+  let remotes = []
   try {
-    upstream = (await git(['rev-parse', '--abbrev-ref', `${name}@{upstream}`])).trim()
+    remotes = (await git(['remote']))
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)
   } catch {
-    upstream = ''
+    remotes = []
   }
-  const slash = upstream.indexOf('/')
-  const remote = slash > 0 ? upstream.slice(0, slash) : 'origin'
-  const branch = slash > 0 ? upstream.slice(slash + 1) : name
+
+  let remote = ''
+  let branch = ''
+  const slash = name.indexOf('/')
+  if (slash > 0 && remotes.includes(name.slice(0, slash))) {
+    remote = name.slice(0, slash)
+    branch = name.slice(slash + 1)
+  }
+
+  if (!remote) {
+    let upstream = ''
+    try {
+      upstream = (await git(['rev-parse', '--abbrev-ref', `${name}@{upstream}`])).trim()
+    } catch {
+      upstream = ''
+    }
+    const upSlash = upstream.indexOf('/')
+    if (upSlash > 0) {
+      remote = upstream.slice(0, upSlash)
+      branch = upstream.slice(upSlash + 1)
+    }
+  }
+
+  if (!remote) {
+    remote = 'origin'
+    branch = name
+  }
+
   const out = await git(['push', remote, '--delete', branch])
   return { ok: true, output: String(out || '').trim() }
 }
@@ -367,9 +398,36 @@ export async function pullRepo(repo) {
 }
 
 export async function pushRepo(repo, force) {
+  const git = makeGit(repo)
+  const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+  if (branch === 'HEAD') throw new Error('当前处于分离头指针状态，请先切到一个分支')
+
+  let upstream = ''
+  try {
+    upstream = (await git(['rev-parse', '--abbrev-ref', `${branch}@{upstream}`])).trim()
+  } catch {
+    upstream = ''
+  }
+
   const args = ['push']
   if (force) args.push('--force-with-lease')
-  const out = await makeGit(repo)(args, { timeout: SYNC_TIMEOUT })
+  if (!upstream) {
+    // 与 Rust 端保持一致：没有上游就自动推到 origin（或第一个远端）并建立跟踪
+    let remotes = []
+    try {
+      remotes = (await git(['remote']))
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    } catch {
+      remotes = []
+    }
+    const remote = remotes.includes('origin') ? 'origin' : remotes[0]
+    if (!remote) throw new Error('这个仓库没有配置远端，先添加一个 remote 再推送')
+    args.push('--set-upstream', remote, branch)
+  }
+
+  const out = await git(args, { timeout: SYNC_TIMEOUT })
   return { ok: true, output: out.trim() }
 }
 
@@ -859,29 +917,65 @@ export async function fsGrep(repo, query, max = 300) {
   return { hits, limitReached: hits.length >= limit }
 }
 
-export async function fsRead(repo, file, maxBytes = 2 * 1024 * 1024) {  const root = path.resolve(repo)
+export async function fsRead(repo, file, maxBytes = 512 * 1024, offset = 0) {
+  const root = path.resolve(repo)
   const target = safeJoin(root, file)
   const stat = fs.statSync(target)
   if (!stat.isFile()) throw new Error(`不是文件：${file}`)
-  const bytes = fs.readFileSync(target)
-  const isBinary = bytes.subarray(0, 8000).includes(0)
-  const { encoding, editable } = detectEncoding(bytes)
-  const truncated = bytes.length > maxBytes
-  const slice = bytes.subarray(0, Math.min(maxBytes, bytes.length))
-  let content = ''
-  if (!isBinary) {
-    content = slice.toString('utf8')
-    if (content.charCodeAt(0) === 0xfeff) content = content.slice(1)
-  }
-  return {
-    file: relOf(root, target),
-    content,
-    size: stat.size,
-    isBinary,
-    truncated,
-    encoding,
-    editable: editable && !isBinary && !truncated,
-    lines: content ? content.split('\n').length : 0,
+
+  const fd = fs.openSync(target, 'r')
+  try {
+    const head = Buffer.alloc(Math.min(8000, stat.size))
+    fs.readSync(fd, head, 0, head.length, 0)
+    const isBinary = head.includes(0)
+
+    const start = Math.min(Math.max(0, Number(offset) || 0), stat.size)
+    const remaining = stat.size - start
+    const want = maxBytes === 0 ? remaining : Math.min(Number(maxBytes) || 0, remaining)
+    const buf = Buffer.alloc(want)
+    const read = want > 0 ? fs.readSync(fd, buf, 0, want, start) : 0
+
+    const eof = start + read >= stat.size
+    let end = read
+    if (!eof) {
+      const nl = buf.subarray(0, read).lastIndexOf(0x0a)
+      if (nl >= 0) {
+        end = nl + 1
+      } else {
+        // 没有换行就尽量别切断 UTF-8 字符（最多回退 3 字节）
+        let tries = 0
+        const original = end
+        while (end > 0 && !isUtf8(buf.subarray(0, end)) && tries < 3) {
+          end -= 1
+          tries += 1
+        }
+        if (end === 0 || !isUtf8(buf.subarray(0, end))) end = original
+      }
+    }
+
+    const slice = buf.subarray(0, end)
+    const { encoding, editable } = detectEncoding(slice)
+    let content = ''
+    if (!isBinary) {
+      content = slice.toString('utf8')
+      if (start === 0 && content.charCodeAt(0) === 0xfeff) content = content.slice(1)
+    }
+    const hasMore = !isBinary && start + end < stat.size
+    return {
+      file: relOf(root, target),
+      content,
+      size: stat.size,
+      isBinary,
+      truncated: hasMore,
+      offset: start,
+      nextOffset: isBinary ? stat.size : start + end,
+      hasMore,
+      encoding,
+      editable: editable && !isBinary && !hasMore,
+      lines: content ? content.split('\n').length : 0,
+    }
+  } finally {
+    fs.closeSync(fd)
   }
 }
 

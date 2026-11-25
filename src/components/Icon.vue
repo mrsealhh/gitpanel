@@ -101,5 +101,62 @@ withDefaults(defineProps<{ name: string; size?: number }>(), { size: 16 })
       <path d="M5 3h11l3 3v15H5z" />
       <path d="M8 3v6h7V3M8 21v-7h8v7" />
     </template>
+    <template v-else-if="name === 'search'">
+      <circle cx="11" cy="11" r="7" />
+      <path d="M20 20l-4-4" />
+    </template>
+    <template v-else-if="name === 'chevron-down'">
+      <path d="M6 9l6 6 6-6" />
+    </template>
+    <template v-else-if="name === 'chevron-up'">
+      <path d="M6 15l6-6 6 6" />
+    </template>
+    <template v-else-if="name === 'copy'">
+      <rect x="8" y="8" width="12" height="12" rx="2" />
+      <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+    </template>
+    <template v-else-if="name === 'compare'">
+      <path d="M4 8h13M14 5l3 3-3 3M20 16H7M10 13l-3 3 3 3" />
+    </template>
+    <template v-else-if="name === 'branch'">
+      <circle cx="6" cy="5" r="2" />
+      <circle cx="6" cy="19" r="2" />
+      <circle cx="18" cy="9" r="2" />
+      <path d="M6 7v10M18 11v1a4 4 0 0 1-4 4H6" />
+    </template>
+    <template v-else-if="name === 'undo'">
+      <path d="M9 14L4 9l5-5" />
+      <path d="M4 9h9a6 6 0 0 1 0 12h-3" />
+    </template>
+    <template v-else-if="name === 'blocks'">
+      <rect x="4" y="4" width="7" height="7" rx="1" />
+      <rect x="13" y="4" width="7" height="7" rx="1" />
+      <rect x="4" y="13" width="7" height="7" rx="1" />
+      <rect x="13" y="13" width="7" height="7" rx="1" />
+    </template>
+    <template v-else-if="name === 'eye'">
+      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" />
+      <circle cx="12" cy="12" r="2.5" />
+    </template>
+    <template v-else-if="name === 'user'">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21a8 8 0 0 1 16 0" />
+    </template>
+    <template v-else-if="name === 'task'">
+      <path d="M9 6h11M9 12h11M9 18h11" />
+      <path d="M4 6h1M4 12h1M4 18h1" />
+    </template>
+    <template v-else-if="name === 'external'">
+      <path d="M14 4h6v6M20 4l-9 9" />
+      <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+    </template>
+    <template v-else-if="name === 'collapse'">
+      <path d="M12 4v9M8 9l4 4 4-4" />
+      <path d="M4 20h16" />
+    </template>
+    <template v-else-if="name === 'expand'">
+      <path d="M12 20v-9M8 15l4-4 4 4" />
+      <path d="M4 4h16" />
+    </template>
   </svg>
 </template>

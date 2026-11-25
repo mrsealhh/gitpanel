@@ -36,6 +36,8 @@ import type {
 } from '../api/types'
 
 const PAGE_SIZE = 400
+/** 编辑器 / 大文件预览每次读取的字节数（滚动到底部自动续读） */
+const EDITOR_CHUNK = 512 * 1024
 
 export interface Notice {
   kind: 'ok' | 'err' | 'info'
@@ -67,7 +69,11 @@ export interface EditorTab {
   editable: boolean
   encoding: string
   truncated: boolean
+  /** 已加载到的字节位置 / 后面是否还有内容 */
+  offset: number
+  hasMore: boolean
   loading: boolean
+  loadingMore: boolean
   saving: boolean
 }
 
@@ -633,7 +639,10 @@ export const useRepoStore = defineStore('repo', {
         editable: true,
         encoding: 'utf8',
         truncated: false,
+        offset: 0,
+        hasMore: false,
         loading: true,
+        loadingMore: false,
         saving: false,
       }
       this.editorTabs.push(tab)
@@ -645,20 +654,50 @@ export const useRepoStore = defineStore('repo', {
       if (!this.path) return
       tab.loading = true
       try {
-        const res = await api.fsRead(this.path, tab.file)
+        const res = await api.fsRead(this.path, tab.file, EDITOR_CHUNK, 0)
         // CodeMirror 内部统一用 LF，这里记下原文件风格，保存时还原
         tab.eol = res.content.includes('\r\n') ? '\r\n' : '\n'
         tab.content = res.content.replace(/\r\n/g, '\n')
         tab.saved = tab.content
         tab.size = res.size
-        tab.lines = res.lines
+        tab.lines = countLines(tab.content)
+        tab.offset = res.nextOffset
+        tab.hasMore = res.hasMore
         tab.editable = res.editable
         tab.encoding = res.encoding
-        tab.truncated = res.truncated
+        tab.truncated = res.hasMore
       } catch (e) {
         this.notify('err', String((e as Error).message || e))
       } finally {
         tab.loading = false
+      }
+    },
+
+    /** 大文件预览：滚动到底部时续读下一段 */
+    async loadMoreEditor() {
+      if (!this.path) return
+      const tab = this.editorTabs.find((t) => t.file === this.activeFile())
+      if (!tab || !tab.hasMore || tab.loading || tab.loadingMore) return
+      tab.loadingMore = true
+      try {
+        const res = await api.fsRead(this.path, tab.file, EDITOR_CHUNK, tab.offset)
+        const next = res.content.replace(/\r\n/g, '\n')
+        if (next) {
+          tab.content += next
+          tab.saved = tab.content
+        }
+        tab.offset = res.nextOffset
+        tab.hasMore = res.hasMore
+        tab.truncated = res.hasMore
+        tab.size = res.size
+        tab.lines = countLines(tab.content)
+        tab.editable = res.editable
+        // BOM 只在第一段出现，后续保持首次识别结果
+        if (tab.encoding !== 'utf8bom') tab.encoding = res.encoding
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      } finally {
+        tab.loadingMore = false
       }
     },
 
@@ -742,11 +781,27 @@ export const useRepoStore = defineStore('repo', {
     addLog(kind: LogEntry['kind'], summary: string, detail: string) {
       this.logs.unshift({ time: Date.now(), kind, summary, detail })
       if (this.logs.length > 300) this.logs.length = 300
+      const st = useSettingsStore()
+      if (st.logAutoPrune) this.pruneLogsNow(st.logRetentionDays)
+      this.persistLogs()
+    },
+
+    persistLogs() {
       try {
         localStorage.setItem(LOG_KEY, JSON.stringify(this.logs.slice(0, 200)))
       } catch {
         /* 存满或隐私模式失败可忽略 */
       }
+    },
+
+    /** 删除超过保留天数的操作日志，返回清理条数 */
+    pruneLogsNow(days: number) {
+      const keep = Math.max(1, Math.floor(days || 30))
+      const cutoff = Date.now() - keep * 86_400_000
+      const before = this.logs.length
+      this.logs = this.logs.filter((l) => l.time >= cutoff)
+      this.persistLogs()
+      return before - this.logs.length
     },
 
     loadLogs() {
@@ -755,6 +810,11 @@ export const useRepoStore = defineStore('repo', {
         if (raw) this.logs = JSON.parse(raw) as LogEntry[]
       } catch {
         this.logs = []
+      }
+      const st = useSettingsStore()
+      if (st.logAutoPrune) {
+        const n = this.pruneLogsNow(st.logRetentionDays)
+        if (n > 0) this.notify('info', `已自动清理 ${n} 条超过 ${st.logRetentionDays} 天的操作日志`)
       }
     },
 

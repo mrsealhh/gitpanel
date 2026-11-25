@@ -4,13 +4,18 @@ import { api } from '../api/git'
 import { useRepoStore } from '../stores/repo'
 import type { FsEntry } from '../api/types'
 import Icon from './Icon.vue'
+import IconButton from './IconButton.vue'
 
 const repo = useRepoStore()
+const emit = defineEmits<{
+  (e: 'file-context', payload: { file: string; isDir: boolean; x: number; y: number }): void
+}>()
 
 const rootEntries = ref<FsEntry[]>([])
 const children = ref<Record<string, FsEntry[]>>({})
 const expanded = ref<Set<string>>(new Set())
 const loading = ref(false)
+const filesLoading = ref(false)
 const q = ref('')
 const allFiles = ref<string[]>([])
 
@@ -85,10 +90,13 @@ async function loadDir(dir: string) {
 
 async function loadAllFiles() {
   if (!repo.path) return
+  filesLoading.value = true
   try {
     allFiles.value = (await api.fsFiles(repo.path)).files
   } catch {
     allFiles.value = []
+  } finally {
+    filesLoading.value = false
   }
 }
 
@@ -103,26 +111,33 @@ async function refresh() {
 
 /** 文件内容搜索（防抖） */
 let grepTimer: number | undefined
+let grepSeq = 0
 function scheduleGrep() {
   if (grepTimer) window.clearTimeout(grepTimer)
   const query = q.value.trim()
   if (mode.value !== 'content' || !query) {
+    grepSeq++
     hits.value = []
     hitLimit.value = false
+    hitsLoading.value = false
     return
   }
+  // 立即给出反馈，避免大仓库 git grep 还没返回时看起来没响应
+  const mine = ++grepSeq
+  hitsLoading.value = true
   grepTimer = window.setTimeout(async () => {
     if (!repo.path) return
-    hitsLoading.value = true
     try {
       const r = await api.fsGrep(repo.path, query, 300)
+      if (mine !== grepSeq) return
       hits.value = r.hits
       hitLimit.value = r.limitReached
     } catch (e) {
+      if (mine !== grepSeq) return
       hits.value = []
       repo.notify('err', String((e as Error).message || e))
     } finally {
-      hitsLoading.value = false
+      if (mine === grepSeq) hitsLoading.value = false
     }
   }, 280)
 }
@@ -131,9 +146,11 @@ watch(q, scheduleGrep)
 watch(mode, () => scheduleGrep())
 
 function clearQuery() {
+  grepSeq++
   q.value = ''
   hits.value = []
   hitLimit.value = false
+  hitsLoading.value = false
 }
 
 async function toggle(entry: FsEntry) {
@@ -153,6 +170,11 @@ async function toggle(entry: FsEntry) {
 
 function openFile(path: string) {
   void repo.openEditor(path)
+}
+
+function onCtx(e: MouseEvent, file: string, isDir = false) {
+  e.preventDefault()
+  emit('file-context', { file, isDir, x: e.clientX, y: e.clientY })
 }
 
 /** 展开某个文件的所有父目录，便于回到文件页签时自动定位 */
@@ -229,24 +251,28 @@ onMounted(() => {
           内容
         </button>
       </div>
-      <button class="btn shrink-0 px-1.5 py-1 text-[10px]" title="刷新文件列表" @click="refresh">刷新</button>
+      <IconButton class="shrink-0" name="refresh" title="刷新文件列表" compact :size="13" @click="refresh" />
     </div>
 
-    <div class="relative px-2 pb-2">
-      <input
-        v-model="q"
-        :placeholder="mode === 'name' ? '查找文件' : '查找文件内容'"
-        class="field w-full py-1 pl-7 pr-7 text-[12px]"
-      />
-      <span class="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[11px] t3">⌕</span>
-      <button
-        v-if="q"
-        class="absolute right-3.5 top-1/2 -translate-y-1/2 text-[12px] t3 hover:opacity-100"
-        title="清除搜索，回到文件树"
-        @click="clearQuery"
-      >
-        ✕
-      </button>
+    <div class="px-2 pb-2">
+      <div class="relative">
+        <input
+          v-model="q"
+          :placeholder="mode === 'name' ? '查找文件' : '查找文件内容'"
+          class="field w-full py-1 pl-7 pr-7 text-[12px]"
+        />
+        <span class="pointer-events-none absolute left-2.5 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center t3">
+          <Icon name="search" :size="13" />
+        </span>
+        <button
+          v-if="q"
+          class="absolute right-1.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded t3 hover:bg-[var(--hover)] hover:opacity-100"
+          title="清除搜索，回到文件树"
+          @click="clearQuery"
+        >
+          <Icon name="close" :size="13" />
+        </button>
+      </div>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto pb-3">
@@ -255,7 +281,12 @@ onMounted(() => {
         <div class="px-3 py-1 text-[10px] uppercase tracking-wider t3">
           {{ mode === 'name' ? '按名称匹配' : '按内容匹配' }}
           <span class="opacity-60">{{ mode === 'name' ? matches.length : hits.length }}{{ hitLimit ? '+' : '' }}</span>
-          <span v-if="hitsLoading" class="ml-1 opacity-60">搜索中…</span>
+          <span v-if="filesLoading && mode === 'name'" class="ml-1 inline-flex items-center gap-1 opacity-60">
+            <span class="inline-block h-2 w-2 animate-spin rounded-full border border-current border-r-transparent" />索引中…
+          </span>
+          <span v-if="hitsLoading" class="ml-1 inline-flex items-center gap-1 opacity-60">
+            <span class="inline-block h-2 w-2 animate-spin rounded-full border border-current border-r-transparent" />搜索中…
+          </span>
         </div>
 
         <template v-if="mode === 'name'">
@@ -266,6 +297,7 @@ onMounted(() => {
             :style="repo.activeFile() === f ? { color: 'var(--accent)' } : { color: 'var(--text-dim)' }"
             :title="f"
             @click="openFile(f)"
+            @contextmenu="onCtx($event, f)"
           >
             <Icon name="file" :size="12" class="shrink-0 t3" />
             <span class="truncate">{{ f }}</span>
@@ -287,6 +319,7 @@ onMounted(() => {
               :style="repo.activeFile() === h.file ? { color: 'var(--accent)' } : { color: 'var(--text-dim)' }"
               :title="`${h.file}:${h.line}`"
               @click="openFile(h.file)"
+              @contextmenu="onCtx($event, h.file)"
             >
               <span class="shrink-0 font-mono text-[10px] opacity-70">{{ h.name }}:{{ h.line }}</span>
               <span class="min-w-0 flex-1 truncate font-mono">{{ h.text }}</span>
@@ -314,6 +347,7 @@ onMounted(() => {
         }"
         :title="row.entry.path"
         @click="toggle(row.entry)"
+        @contextmenu="onCtx($event, row.entry.path, row.entry.isDir)"
       >
         <span class="w-3 shrink-0 text-[9px] t3">
           {{ row.entry.isDir ? (expanded.has(row.entry.path) ? '▾' : '▸') : '' }}

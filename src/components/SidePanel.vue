@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import type { BranchStatus, RepoRef } from '../api/types'
 import { useRepoStore } from '../stores/repo'
+import IconButton from './IconButton.vue'
 import { buildBranchTree, filterTree, flattenTree, type FlatRow, type TreeNode } from '../lib/branchTree'
 
 const props = defineProps<{
@@ -18,6 +19,8 @@ const emit = defineEmits<{
   (e: 'create-tag'): void
   (e: 'sync', kind: 'fetch' | 'pull' | 'push'): void
   (e: 'compare', name: string): void
+  (e: 'checkout', name: string): void
+  (e: 'delete-remote', name: string): void
 }>()
 
 /** 分支名 → 上游/领先/落后 */
@@ -156,12 +159,30 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
       <div class="truncate text-[13px] font-semibold t1">{{ name }}</div>
       <div class="mt-0.5 flex items-center gap-1.5 text-[11px] t3">
         <span class="h-1.5 w-1.5 rounded-full" style="background: var(--accent)" />
-        <span class="truncate">{{ branch }}</span>
+        <span class="min-w-0 truncate">{{ branch }}</span>
         <span v-if="statusMap[branch]?.ahead" class="shrink-0" :style="{ color: 'var(--accent)' }">
           ↑{{ statusMap[branch].ahead }}
         </span>
         <span v-if="statusMap[branch]?.behind" class="shrink-0" :style="{ color: 'var(--badge-head-fg)' }">
           ↓{{ statusMap[branch].behind }}
+        </span>
+        <span class="ml-auto flex shrink-0 items-center gap-0.5">
+          <IconButton compact name="fetch" :title="'抓取远端更新（fetch）'" :size="12" @click="emit('sync', 'fetch')" />
+          <IconButton
+            compact
+            name="pull"
+            :title="`拉取并合并（pull）${statusMap[branch]?.behind ? `，落后 ${statusMap[branch].behind}` : ''}`"
+            :size="12"
+            @click="emit('sync', 'pull')"
+          />
+          <IconButton
+            compact
+            name="push"
+            :title="`推送到远端（push）${statusMap[branch]?.ahead ? `，领先 ${statusMap[branch].ahead}` : ''}；没有上游会自动 --set-upstream`"
+            :size="12"
+            :active="!!statusMap[branch]?.ahead"
+            @click="emit('sync', 'push')"
+          />
         </span>
       </div>
       <div v-if="changeStats" class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] t3">
@@ -175,8 +196,8 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
 
     <div class="flex items-center gap-1 p-2">
       <input v-model="q" placeholder="过滤分支 / 标签" class="field min-w-0 flex-1 px-2 py-1 text-[12px]" />
-      <button class="btn shrink-0 px-1.5 py-1 text-[10px]" title="展开全部树节点" @click="expandAll">展开</button>
-      <button class="btn shrink-0 px-1.5 py-1 text-[10px]" title="折叠全部树节点" @click="collapseAll">折叠</button>
+      <IconButton compact name="chevron-down" title="展开全部" :size="14" @click="expandAll" />
+      <IconButton compact name="chevron-up" title="折叠全部" :size="14" @click="collapseAll" />
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto pb-3">
@@ -201,7 +222,7 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
       <div v-show="open.local">
         <div v-for="row in localRows" :key="`l:${row.node.path}`">
         <div
-          class="flex w-full cursor-pointer items-center gap-1 truncate py-[3px] text-[12px] row-hover"
+          class="flex w-full cursor-pointer items-center gap-1 py-[3px] text-[12px] row-hover"
           :style="rowStyle(row.depth, tip === row.node.ref?.name, !!row.node.ref)"
           :title="row.node.path"
           @click="onNode(row, 'local')"
@@ -219,7 +240,7 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
             class="h-1.5 w-1.5 shrink-0 rounded-full"
             :style="{ background: row.node.ref?.name === branch ? 'var(--accent)' : 'transparent' }"
           />
-          <span class="truncate" :style="row.node.ref?.name === branch ? { color: 'var(--accent)', fontWeight: 500 } : {}">
+          <span class="min-w-0 flex-1 truncate" :style="row.node.ref?.name === branch ? { color: 'var(--accent)', fontWeight: 500 } : {}">
             {{ row.node.seg }}
           </span>
 
@@ -249,32 +270,14 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
             当前
           </span>
           <span v-else-if="statusMap[row.node.ref?.name ?? '']" class="ml-auto flex shrink-0 items-center gap-1">
-            <button
-              class="rounded px-1 text-[9px] t3 hover:opacity-100"
-              :style="{ border: '1px solid var(--border)' }"
-              title="与当前 HEAD 对比，看这个分支有没有别的改动"
+            <IconButton
+              compact
+              name="compare"
+              title="与当前 HEAD 对比"
+              :size="12"
               @click.stop="emit('compare', row.node.ref!.name)"
-            >
-              对比
-            </button>
+            />
           </span>
-        </div>
-
-        <!-- 当前分支的远端操作，直接放在分支下面 -->
-        <div
-          v-if="row.node.ref?.name === branch && statusMap[branch]?.upstream"
-          class="flex items-center gap-1 py-[2px]"
-          :style="{ paddingLeft: `${26 + row.depth * 12}px` }"
-        >
-          <button class="rounded px-1.5 py-0 text-[9px] t3 hover:opacity-100" :style="{ border: '1px solid var(--border)' }" title="抓取远端更新" @click="emit('sync', 'fetch')">
-            抓取
-          </button>
-          <button class="rounded px-1.5 py-0 text-[9px] t3 hover:opacity-100" :style="{ border: '1px solid var(--border)' }" title="拉取并合并" @click="emit('sync', 'pull')">
-            拉取{{ statusMap[branch]?.behind ? ` ${statusMap[branch].behind}` : '' }}
-          </button>
-          <button class="rounded px-1.5 py-0 text-[9px] t3 hover:opacity-100" :style="{ border: '1px solid var(--border)' }" title="推送到远端" @click="emit('sync', 'push')">
-            推送{{ statusMap[branch]?.ahead ? ` ${statusMap[branch].ahead}` : '' }}
-          </button>
         </div>
 
       </div>
@@ -294,7 +297,7 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
           <div
             v-for="row in remoteRows"
             :key="`r:${row.node.path}`"
-            class="flex w-full cursor-pointer items-center gap-1 truncate py-[3px] text-[12px] row-hover"
+            class="group flex w-full cursor-pointer items-center gap-1 py-[3px] text-[12px] row-hover"
             :style="rowStyle(row.depth, tip === row.node.ref?.name, !!row.node.ref)"
             :title="row.node.path"
             @click="onNode(row, 'remote')"
@@ -308,7 +311,27 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
               {{ row.expanded ? '▾' : '▸' }}
             </span>
             <span v-else class="w-3 shrink-0" />
-            <span class="truncate">{{ row.node.seg }}</span>
+            <span class="min-w-0 flex-1 truncate">{{ row.node.seg }}</span>
+            <span
+              v-if="row.node.ref"
+              class="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100"
+            >
+              <IconButton
+                compact
+                name="branch"
+                title="签出为本地分支（自动建立跟踪）"
+                :size="12"
+                @click.stop="emit('checkout', row.node.ref!.name)"
+              />
+              <IconButton
+                compact
+                name="trash"
+                title="删除远端分支"
+                danger
+                :size="12"
+                @click.stop="emit('delete-remote', row.node.ref!.name)"
+              />
+            </span>
           </div>
         </div>
       </div>

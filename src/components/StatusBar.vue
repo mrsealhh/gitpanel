@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useRepoStore } from '../stores/repo'
 import { useSettingsStore } from '../stores/settings'
+import { apiBusy } from '../api/git'
 
 const repo = useRepoStore()
 const settings = useSettingsStore()
@@ -28,6 +29,11 @@ const errCount = computed(() => repo.logs.filter((l) => l.kind === 'err').length
       过滤：{{ repo.tip }}
     </span>
 
+    <span v-if="apiBusy > 0" class="flex items-center gap-1" :style="{ color: 'var(--accent)' }">
+      <span class="busy-spinner" />
+      处理中<span v-if="apiBusy > 1"> ×{{ apiBusy }}</span>
+    </span>
+
     <span class="ml-auto">{{ counts.rows }} commits</span>
     <span v-if="counts.plugins">· {{ counts.plugins }} 个插件命令</span>
     <button
@@ -42,3 +48,19 @@ const errCount = computed(() => repo.logs.filter((l) => l.kind === 'err').length
     <span>· {{ settings.themeLabel }}</span>
   </footer>
 </template>
+
+<style scoped>
+.busy-spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: busy-spin 0.7s linear infinite;
+}
+@keyframes busy-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+</style>

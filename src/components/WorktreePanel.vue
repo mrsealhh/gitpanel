@@ -110,19 +110,20 @@ async function remove(wt: { path: string; dirty: number; isCurrent: boolean }) {
           <span class="ml-auto">{{ wt.lastCommit ? relativeTime(lastActive(wt)) : '—' }}</span>
         </div>
 
-        <div class="mt-1 flex items-center gap-1">
-          <button v-if="!wt.isCurrent" class="btn px-1.5 py-0 text-[10px]" @click="emit('open', wt.path)">打开</button>
-          <button class="btn px-1.5 py-0 text-[10px]" @click="copyPath(wt.path)">复制路径</button>
-          <button class="btn px-1.5 py-0 text-[10px]" @click="emit('set-agent', wt.path)">标记 Agent</button>
-          <button class="btn px-1.5 py-0 text-[10px]" @click="emit('set-task', wt.path)">记录任务</button>
-          <button
+        <div class="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100">
+          <IconButton v-if="!wt.isCurrent" compact name="external" title="打开这个工作树" :size="12" @click="emit('open', wt.path)" />
+          <IconButton compact name="copy" title="复制工作树路径" :size="12" @click="copyPath(wt.path)" />
+          <IconButton compact name="user" title="标记使用这个工作树的 Agent" :size="12" @click="emit('set-agent', wt.path)" />
+          <IconButton compact name="task" title="记录这个工作树在做什么" :size="12" @click="emit('set-task', wt.path)" />
+          <IconButton
             v-if="!wt.isCurrent"
-            class="btn px-1.5 py-0 text-[10px]"
-            style="color: #f87171"
+            compact
+            name="trash"
+            title="移除工作树（目录删除，分支保留）"
+            danger
+            :size="12"
             @click="remove(wt)"
-          >
-            移除
-          </button>
+          />
         </div>
       </div>
     </div>

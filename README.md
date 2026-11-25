@@ -9,6 +9,31 @@
 [![License](https://img.shields.io/github/license/mrsealhh/gitpanel)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#install)
 
+<p align="center">
+  <img src="docs/screenshots/hero.png" alt="GitPanel 主界面：提交图、变动详情、工作区与文件面板" width="100%" />
+</p>
+
+## 界面预览
+
+截图来自真实仓库，不是设计稿。
+
+| 并排 Diff（大文件分段加载） | 工作区与按块暂存 |
+| --- | --- |
+| ![](docs/screenshots/diff.png) | ![](docs/screenshots/working.png) |
+
+| 安全网快照与 reflog | 设置：安全网自动清理 |
+| --- | --- |
+| ![](docs/screenshots/safety.png) | ![](docs/screenshots/settings.png) |
+
+<details>
+<summary>更多截图：命令面板 / 浅色主题</summary>
+
+| 命令面板 | 浅色主题 |
+| --- | --- |
+| ![](docs/screenshots/palette.png) | ![](docs/screenshots/light.png) |
+
+</details>
+
 ## 功能
 
 **历史与浏览**
@@ -16,19 +41,20 @@
 - 搜索提交（说明 / 作者 / SHA）+ 日期范围筛选（今日 / 昨日 / 近三天 / 近一周，或自定义起止）
 - 「只看某分支 / 某提交起的历史」，顶部常驻返回栏
 - 任选两个提交 / 分支对比：文件列表 + 并排 Diff
+- 提交详情按需打开：点某行提交才出现「变动详情」页签，可随时关闭，默认只留「文件」页签
 - 提交详情、文件历史（跟随重命名）、Blame、仓库体检、reflog
 
 **改动与提交**
 - 工作区三态（已暂存 / 未暂存 / 未跟踪）+ 冲突文件一眼可见
 - **按 diff 块暂存 / 取消暂存 / 丢弃**，也可以整文件操作
 - 多段提交信息、amend、`Ctrl+Enter` 提交
-- 并排 Diff（CodeMirror 6 MergeView），未变更段落自动折叠
-- 大文件不截断：按行分段读取，点「继续加载」往后翻，行数与阈值可配置
+- 并排 Diff（CodeMirror 6 MergeView），未变更段落自动折叠，左右滚动同步
+- 大文件 Diff 滚动到底部自动续读下一段，也可以手动「继续加载」
 
 **分支与协作**
 - 分支按 `/` 分层成树，本地 / 远端 / 标签分组可折叠
 - 每个分支显示上游 ahead / behind；当前分支下方常驻抓取 / 拉取 / 推送
-- 检出 `origin/xxx` 自动建同名本地跟踪分支
+- 检出 `origin/xxx` 自动建同名本地跟踪分支；远端分支也可直接签出或删除
 - 分支右键：合并、交互式 rebase、重命名、删除（可一并删除远端分支）
 - 推送时自动 `--set-upstream`，不再被 "no upstream branch" 卡住
 - Cherry-pick / Revert，冲突后「继续 / 跳过 / 中止」
@@ -37,6 +63,7 @@
 - 交互式 rebase：pick / reword / edit / squash / fixup / drop，支持冲突与编辑暂停
 - reset soft / mixed / hard，reflog 一键回滚
 - **安全网**：合并、拉取、重置、丢弃前自动打快照，可回滚，也可彻底删除；默认不自动清理，可在设置里开启「删除超过 N 天（默认 30 天）的快照」
+- **操作日志**：错误与关键操作可复盘；日志同样支持配置保留天数，默认不自动删除
 
 **工作树与多仓库**
 - 工作树（并行副本）增删、prune
@@ -46,6 +73,8 @@
 **文件**
 - 右侧「文件」页签：目录树、按名称搜索、**按内容搜索**（结果按目录树分组）
 - 直接在应用内查看 / 编辑文件，`Ctrl+F` 文件内搜索，`Ctrl+S` 保存
+- 大文件预览按 512KB 分段流式加载，滚动到底部自动续读，首屏不用等整文件
+- 文件树 / 文件页签右键可复制相对路径、绝对路径、所在目录路径，方便直接贴给 AI
 - 只写 UTF-8（保留 BOM 与原换行风格）；GBK 等其它编码只读，避免写坏文件
 - 编辑器与 Diff 都是**多标签**，可横向滚动、单个或全部关闭
 

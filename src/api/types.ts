@@ -155,6 +155,10 @@ export interface FileText {
   size: number
   isBinary: boolean
   truncated: boolean
+  /** 本次分块起始字节 / 下一块起始字节 */
+  offset: number
+  nextOffset: number
+  hasMore: boolean
   /** utf8 / utf8bom / other（other 只读，避免写回改坏编码） */
   encoding: string
   editable: boolean

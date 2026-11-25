@@ -1293,16 +1293,39 @@ impl Repo {
         if !crate::actions::valid_ref(name) {
             bail!("非法的分支名");
         }
-        // 有上游就用上游，没有就默认 origin
-        let upstream = git_allow_fail(
-            self.path(),
-            &["rev-parse", "--abbrev-ref", &format!("{name}@{{upstream}}")],
-        )
-        .unwrap_or_default();
-        let (remote, branch) = match upstream.trim().split_once('/') {
-            Some((r, b)) if !r.is_empty() && !b.is_empty() => (r.to_string(), b.to_string()),
-            _ => ("origin".to_string(), name.to_string()),
-        };
+        let remotes = git_allow_fail(self.path(), &["remote"]).unwrap_or_default();
+        let is_remote = |r: &str| remotes.lines().any(|l| l.trim() == r);
+
+        // 支持两种入参：远端分支 origin/feat/x，或本地分支 feat/x（按它的上游推断）
+        let mut remote = String::new();
+        let mut branch = String::new();
+        if let Some((r, b)) = name.split_once('/') {
+            if !r.is_empty() && !b.is_empty() && is_remote(r) {
+                remote = r.to_string();
+                branch = b.to_string();
+            }
+        }
+
+        if remote.is_empty() {
+            let upstream = git_allow_fail(
+                self.path(),
+                &["rev-parse", "--abbrev-ref", &format!("{name}@{{upstream}}")],
+            )
+            .unwrap_or_default();
+            match upstream.trim().split_once('/') {
+                Some((r, b)) if !r.is_empty() && !b.is_empty() => {
+                    remote = r.to_string();
+                    branch = b.to_string();
+                }
+                _ => {}
+            }
+        }
+
+        if remote.is_empty() {
+            remote = "origin".to_string();
+            branch = name.to_string();
+        }
+
         let out = git(self.path(), &["push", &remote, "--delete", &branch])?;
         Ok(out.trim().to_string())
     }
