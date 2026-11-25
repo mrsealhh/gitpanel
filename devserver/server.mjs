@@ -326,6 +326,33 @@ async function listRemotes(repoPath) {
 
 const SAFE_REF = /^[A-Za-z0-9._\-\/]+$/
 
+function validRemote(name, url) {
+  const n = String(name || '').trim()
+  const u = String(url || '').trim()
+  if (!n || n.startsWith('-') || !SAFE_REF.test(n)) throw new Error('非法的远端名称')
+  if (!u || u.startsWith('-')) throw new Error('非法的远端地址')
+  return { n, u }
+}
+
+async function addRemote(repoPath, name, url) {
+  const { n, u } = validRemote(name, url)
+  await git(repoPath, ['remote', 'add', n, u])
+  return { ok: true }
+}
+
+async function setRemoteUrl(repoPath, name, url) {
+  const { n, u } = validRemote(name, url)
+  await git(repoPath, ['remote', 'set-url', n, u])
+  return { ok: true }
+}
+
+async function removeRemote(repoPath, name) {
+  const n = String(name || '').trim()
+  if (!n || n.startsWith('-') || !SAFE_REF.test(n)) throw new Error('非法的远端名称')
+  await git(repoPath, ['remote', 'remove', n])
+  return { ok: true }
+}
+
 async function checkoutRef(repoPath, ref) {
   if (!ref || ref.startsWith('-') || !SAFE_REF.test(ref)) throw new Error('非法的引用名')
 
@@ -412,6 +439,15 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/commands') return send(res, 200, await listCommands(body.path))
     if (url.pathname === '/api/run-command') return send(res, 200, await runCommand(body.path, body.id))
     if (url.pathname === '/api/remotes') return send(res, 200, await listRemotes(body.path))
+    if (url.pathname === '/api/remote-add') {
+      return send(res, 200, await addRemote(body.path, body.name, body.url))
+    }
+    if (url.pathname === '/api/remote-set-url') {
+      return send(res, 200, await setRemoteUrl(body.path, body.name, body.url))
+    }
+    if (url.pathname === '/api/remote-remove') {
+      return send(res, 200, await removeRemote(body.path, body.name))
+    }
     if (url.pathname === '/api/checkout') return send(res, 200, await checkoutRef(body.path, body.ref))
     if (url.pathname === '/api/create-branch') {
       return send(res, 200, await createBranch(body.path, body.name, body.from))
@@ -441,7 +477,7 @@ const server = http.createServer(async (req, res) => {
       )
     }
     if (url.pathname === '/api/fetch') return send(res, 200, await ops.fetchRepo(body.path))
-    if (url.pathname === '/api/pull') return send(res, 200, await ops.pullRepo(body.path))
+    if (url.pathname === '/api/pull') return send(res, 200, await ops.pullRepo(body.path, body.strategy))
     if (url.pathname === '/api/push') return send(res, 200, await ops.pushRepo(body.path, !!body.force))
     if (url.pathname === '/api/snapshots') return send(res, 200, await ops.listSnapshots(body.path))
     if (url.pathname === '/api/delete-snapshot') {
@@ -539,6 +575,9 @@ const server = http.createServer(async (req, res) => {
     // ── 文件历史 / Blame / 体检 ──
     if (url.pathname === '/api/file-history') {
       return send(res, 200, await ops.fileHistory(body.path, body.file, body.limit))
+    }
+    if (url.pathname === '/api/search-history') {
+      return send(res, 200, await ops.searchHistory(body.path, body.query, body.limit))
     }
     if (url.pathname === '/api/blame') {
       return send(res, 200, await ops.blameFile(body.path, body.file, body.max))

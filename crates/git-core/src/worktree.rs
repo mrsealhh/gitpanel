@@ -950,8 +950,14 @@ impl Repo {
         Ok(git(self.path(), &["fetch", "--all", "--prune"])?.trim().to_string())
     }
 
-    pub fn pull(&self) -> Result<String> {
-        Ok(git(self.path(), &["pull", "--no-rebase", "--autostash"])?.trim().to_string())
+    pub fn pull(&self, strategy: &str) -> Result<String> {
+        let mut args = vec!["pull", "--autostash"];
+        match strategy {
+            "rebase" => args.push("--rebase"),
+            "ff-only" => args.push("--ff-only"),
+            _ => args.push("--no-rebase"),
+        }
+        Ok(git(self.path(), &args)?.trim().to_string())
     }
 
     /// 推送：分支还没有上游时自动 `--set-upstream` 到 origin（或第一个远端），
@@ -1738,6 +1744,43 @@ impl Repo {
                 "--format=%H%x1f%s%x1f%an%x1f%ct",
                 "--",
                 file,
+            ],
+        )?;
+
+        Ok(out
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|line| {
+                let mut it = line.split('\u{1f}');
+                let oid = it.next().unwrap_or("").to_string();
+                FileHistoryEntry {
+                    short: oid.chars().take(7).collect(),
+                    oid,
+                    subject: it.next().unwrap_or("").to_string(),
+                    author: it.next().unwrap_or("").to_string(),
+                    time: it.next().unwrap_or("0").parse().unwrap_or(0),
+                }
+            })
+            .collect())
+    }
+
+    /// 内容级历史搜索：`git log -S<query>`，找出新增/删除过这段文本的提交
+    pub fn search_history(&self, query: &str, limit: usize) -> Result<Vec<FileHistoryEntry>> {
+        let q = query.trim();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+        let n = limit.clamp(1, 500).to_string();
+        let needle = format!("-S{q}");
+        let out = git(
+            self.path(),
+            &[
+                "log",
+                "--no-merges",
+                "--max-count",
+                &n,
+                "--format=%H%x1f%s%x1f%an%x1f%ct",
+                &needle,
             ],
         )?;
 

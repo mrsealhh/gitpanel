@@ -14,6 +14,7 @@ import FileHistoryModal from './components/FileHistoryModal.vue'
 import FileEditor from './components/FileEditor.vue'
 import FilePanel from './components/FilePanel.vue'
 import HealthModal from './components/HealthModal.vue'
+import HistorySearchModal from './components/HistorySearchModal.vue'
 import ProjectSwitcher from './components/ProjectSwitcher.vue'
 import CompareList from './components/CompareList.vue'
 import HunkDialog from './components/HunkDialog.vue'
@@ -24,6 +25,7 @@ import IconButton from './components/IconButton.vue'
 import InputDialog from './components/InputDialog.vue'
 import PatchModal from './components/PatchModal.vue'
 import RebaseDialog from './components/RebaseDialog.vue'
+import RemoteDialog from './components/RemoteDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import SidePanel from './components/SidePanel.vue'
 import SnapshotPanel from './components/SnapshotPanel.vue'
@@ -67,6 +69,7 @@ const detailTabOpen = ref(false)
 const maximized = ref(false)
 const diffFullscreen = ref(false)
 const showWorktreeDialog = ref(false)
+const showRemotes = ref(false)
 const showDashboard = ref(false)
 const showClone = ref(false)
 const cloneUrl = ref('')
@@ -418,6 +421,11 @@ function closeDetailTab() {
 function onSelectCommit(row: CommitRow) {
   openDetailTab()
   repo.select(row)
+}
+
+async function onHistoryHit(oid: string) {
+  openDetailTab()
+  await repo.focusCommit(oid)
 }
 
 /* ── 提交右键菜单 ── */
@@ -999,6 +1007,7 @@ onBeforeUnmount(() => {
           @compare="repo.openCompare($event, 'HEAD')"
           @checkout="onCheckoutRef"
           @delete-remote="onDeleteRemoteBranch"
+          @manage-remotes="showRemotes = true"
         />
         <StashPanel v-else-if="leftTab === 'stashes'" class="min-h-0 flex-1" @create="openCreateStash" />
         <WorktreePanel
@@ -1313,6 +1322,11 @@ onBeforeUnmount(() => {
     <FileHistoryModal />
     <BlameModal />
     <HealthModal />
+    <HistorySearchModal
+      v-if="repo.historySearchOpen"
+      @close="repo.closeHistorySearch()"
+      @open="onHistoryHit"
+    />
     <DashboardModal v-if="showDashboard" @close="showDashboard = false" @open="openPath" />
     <CloneDialog
       v-if="showClone"
@@ -1328,11 +1342,14 @@ onBeforeUnmount(() => {
     />
     <LogModal v-if="repo.logOpen" @close="repo.logOpen = false" />
     <WorktreeDialog v-if="showWorktreeDialog" @close="showWorktreeDialog = false" />
+    <RemoteDialog v-if="showRemotes" @close="showRemotes = false" />
     <CommandPalette
       v-if="showPalette"
       @close="showPalette = false"
       @settings="showSettings = true"
       @dashboard="showDashboard = true"
+      @remotes="showRemotes = true"
+      @history-search="repo.openHistorySearch()"
     />
     <SettingsDialog v-if="showSettings" @close="showSettings = false" />
     <ContextMenu

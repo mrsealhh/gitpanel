@@ -214,6 +214,10 @@ export const useRepoStore = defineStore('repo', {
     // 文件历史 / Blame / 体检
     fileHistoryFile: '',
     fileHistory: [] as FileHistoryEntry[],
+    historySearchOpen: false,
+    historySearchQuery: '',
+    historySearchHits: [] as FileHistoryEntry[],
+    historySearchLoading: false,
     blameFile: '',
     blameLines: [] as BlameLine[],
     health: null as RepoHealth | null,
@@ -283,6 +287,40 @@ export const useRepoStore = defineStore('repo', {
       } catch {
         this.commands = []
         this.remotes = []
+      }
+    },
+
+    async addRemote(name: string, url: string) {
+      if (!this.path) return
+      try {
+        await api.addRemote(this.path, name, url)
+        this.notify('ok', `已添加远端 ${name}`)
+        await this.loadExtras()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async setRemoteUrl(name: string, url: string) {
+      if (!this.path) return
+      try {
+        await api.setRemoteUrl(this.path, name, url)
+        this.notify('ok', `已更新 ${name} 的地址`)
+        await this.loadExtras()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    async removeRemote(name: string) {
+      if (!this.path) return
+      try {
+        await api.removeRemote(this.path, name)
+        this.notify('ok', `已删除远端 ${name}`)
+        await this.loadExtras()
+        this.info = await api.openRepo(this.path)
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
       }
     },
 
@@ -987,7 +1025,7 @@ export const useRepoStore = defineStore('repo', {
           kind === 'fetch'
             ? await api.fetch(this.path)
             : kind === 'pull'
-              ? await api.pull(this.path)
+              ? await api.pull(this.path, useSettingsStore().pullStrategy)
               : await api.push(this.path, force)
         this.syncOutput = r.output || '(无输出)'
         this.notify('ok', `${kind} 完成`)
@@ -1487,6 +1525,65 @@ export const useRepoStore = defineStore('repo', {
     closeFileHistory() {
       this.fileHistoryFile = ''
       this.fileHistory = []
+    },
+
+    openHistorySearch() {
+      this.historySearchOpen = true
+      this.historySearchQuery = ''
+      this.historySearchHits = []
+    },
+
+    closeHistorySearch() {
+      this.historySearchOpen = false
+      this.historySearchLoading = false
+    },
+
+    async searchHistory(query: string) {
+      if (!this.path) return
+      this.historySearchQuery = query
+      const q = query.trim()
+      if (!q) {
+        this.historySearchHits = []
+        return
+      }
+      this.historySearchLoading = true
+      try {
+        this.historySearchHits = (await api.searchHistory(this.path, q, 200)).hits
+      } catch (e) {
+        this.historySearchHits = []
+        this.notify('err', String((e as Error).message || e))
+      } finally {
+        this.historySearchLoading = false
+      }
+    },
+
+    /** 内容搜索点结果：尽量定位到提交图里的那一行，找不到就直接展示详情 */
+    async focusCommit(oid: string) {
+      const row = this.rows.find((r) => r.oid === oid)
+      if (row) {
+        await this.select(row)
+        return
+      }
+      if (!this.path) return
+      try {
+        const detail = await api.commit(this.path, oid)
+        this.selected = {
+          oid: detail.oid,
+          short: detail.short,
+          parents: detail.parents,
+          lane: 0,
+          color: 0,
+          author: detail.author,
+          email: detail.email,
+          time: detail.time,
+          refs: [],
+          summary: detail.summary,
+          segments: [],
+        }
+        this.detail = detail
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
     },
 
     async openBlame(file: string) {

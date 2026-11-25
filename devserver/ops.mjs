@@ -391,9 +391,13 @@ export async function fetchRepo(repo) {
   return { ok: true, output: out.trim() }
 }
 
-export async function pullRepo(repo) {
+export async function pullRepo(repo, strategy = 'merge') {
   const snap = await createSnapshot(repo, 'before-pull')
-  const out = await makeGit(repo)(['pull', '--no-rebase', '--autostash'], { timeout: SYNC_TIMEOUT })
+  const args = ['pull', '--autostash']
+  if (strategy === 'rebase') args.push('--rebase')
+  else if (strategy === 'ff-only') args.push('--ff-only')
+  else args.push('--no-rebase')
+  const out = await makeGit(repo)(args, { timeout: SYNC_TIMEOUT })
   return { ok: true, output: out.trim(), snapshot: snap }
 }
 
@@ -772,6 +776,29 @@ export async function fileHistory(repo, file, limit = 200) {
   return {
     file,
     commits: out
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [oid, subject, author, at] = line.split('\x1f')
+        return { oid, short: oid.slice(0, 7), subject: subject || '', author: author || '', time: Number(at) || 0 }
+      }),
+  }
+}
+
+export async function searchHistory(repo, query, limit = 200) {
+  const q = String(query || '').trim()
+  if (!q) return { query: q, hits: [] }
+  const git = makeGit(repo)
+  const out = await git([
+    'log',
+    '--no-merges',
+    `--max-count=${Math.min(500, Math.max(1, limit))}`,
+    '--format=%H%x1f%s%x1f%an%x1f%ct',
+    `-S${q}`,
+  ])
+  return {
+    query: q,
+    hits: out
       .split('\n')
       .filter(Boolean)
       .map((line) => {

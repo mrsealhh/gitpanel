@@ -84,6 +84,18 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
         "commands" => json!({ "commands": repo.commands() }),
         "run-command" => serde_json::to_value(repo.run_command(&s(&p, "id"))?)?,
         "remotes" => json!({ "remotes": repo.remotes()? }),
+        "remote-add" => {
+            repo.add_remote(&s(&p, "name"), &s(&p, "url"))?;
+            json!({ "ok": true })
+        }
+        "remote-set-url" => {
+            repo.set_remote_url(&s(&p, "name"), &s(&p, "url"))?;
+            json!({ "ok": true })
+        }
+        "remote-remove" => {
+            repo.remove_remote(&s(&p, "name"))?;
+            json!({ "ok": true })
+        }
 
         "checkout" => serde_json::to_value(repo.checkout(&s(&p, "ref"))?)?,
         "create-branch" => {
@@ -116,7 +128,7 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
         "fetch" => json!({ "ok": true, "output": repo.fetch()? }),
         "pull" => {
             let snapshot = repo.create_snapshot("before-pull")?;
-            let output = repo.pull()?;
+            let output = repo.pull(&s(&p, "strategy"))?;
             json!({ "ok": true, "output": output, "snapshot": snapshot })
         }
         "push" => json!({ "ok": true, "output": repo.push(b(&p, "force"))? }),
@@ -247,6 +259,10 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
         "file-history" => json!({            "file": s(&p, "file"),
             "commits": repo.file_history(&s(&p, "file"), n(&p, "limit", 200) as usize)?
         }),
+        "search-history" => {
+            let query = s(&p, "query");
+            json!({ "query": query, "hits": repo.search_history(&query, n(&p, "limit", 200) as usize)? })
+        }
         "blame" => {
             let lines = repo.blame(&s(&p, "file"), n(&p, "max", 2000) as usize)?;
             json!({ "file": s(&p, "file"), "lines": lines, "truncated": false })

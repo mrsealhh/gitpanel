@@ -30,6 +30,12 @@ function applyDensity(id: Density) {
   toast(`列表密度：${DENSITY_LABELS[id]}`)
 }
 
+function setPullStrategy(id: 'merge' | 'rebase' | 'ff-only', label: string) {
+  settings.pullStrategy = id
+  settings.save()
+  toast(`Pull 策略：${label}`)
+}
+
 function saveToggle(label: string, on: boolean) {
   settings.save()
   toast(`${label}：${on ? '已开启' : '已关闭'}`)
@@ -204,6 +210,39 @@ const updateStatus = computed(() => {  switch (update.phase) {
             <span class="text-[12px] t2">危险操作需二次确认</span>
             <input type="checkbox" v-model="settings.confirmDangerous" class="h-4 w-4 accent-[var(--accent)]" @change="saveToggle('危险操作二次确认', settings.confirmDangerous)" />
           </label>
+        </section>
+
+        <section class="mb-6">
+          <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider t3">同步</h3>
+          <div class="flex items-center justify-between py-1.5">
+            <span class="text-[12px] t2">Pull 策略</span>
+            <div class="flex gap-2">
+              <button
+                class="btn"
+                :style="settings.pullStrategy === 'merge' ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}"
+                @click="setPullStrategy('merge', 'Merge')"
+              >
+                Merge
+              </button>
+              <button
+                class="btn"
+                :style="settings.pullStrategy === 'rebase' ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}"
+                @click="setPullStrategy('rebase', 'Rebase')"
+              >
+                Rebase
+              </button>
+              <button
+                class="btn"
+                :style="settings.pullStrategy === 'ff-only' ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}"
+                @click="setPullStrategy('ff-only', '仅快进')"
+              >
+                FF-only
+              </button>
+            </div>
+          </div>
+          <p class="mt-1 text-[11px] leading-relaxed t3">
+            Pull 时会自动 autostash。Merge 保留合并提交；Rebase 把本地提交接到远端后面；FF-only 不能快进时直接报错。
+          </p>
         </section>
 
         <section class="mb-6">

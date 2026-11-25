@@ -71,6 +71,8 @@ interface Persisted {
   logAutoPrune: boolean
   /** 操作日志保留天数（默认 30 天） */
   logRetentionDays: number
+  /** Pull 策略：merge / rebase / ff-only */
+  pullStrategy: 'merge' | 'rebase' | 'ff-only'
   /** 底部工作区面板：高度 / 是否展开 */
   workDockHeight: number
   workDockOpen: boolean
@@ -98,6 +100,7 @@ function load(): Persisted {
     snapshotRetentionDays: 30,
     logAutoPrune: false,
     logRetentionDays: 30,
+    pullStrategy: 'merge',
     workDockHeight: 280,
     workDockOpen: true,
   }
@@ -163,6 +166,7 @@ export const useSettingsStore = defineStore('settings', {
         snapshotRetentionDays,
         logAutoPrune,
         logRetentionDays,
+        pullStrategy,
         workDockHeight,
         workDockOpen,
       } = this
@@ -189,6 +193,7 @@ export const useSettingsStore = defineStore('settings', {
           snapshotRetentionDays,
           logAutoPrune,
           logRetentionDays,
+          pullStrategy,
           workDockHeight,
           workDockOpen,
         }),
@@ -216,6 +221,7 @@ export const useSettingsStore = defineStore('settings', {
       this.snapshotRetentionDays = 30
       this.logAutoPrune = false
       this.logRetentionDays = 30
+      this.pullStrategy = 'merge'
       this.workDockHeight = 280
       this.workDockOpen = true
       this.applyTheme()

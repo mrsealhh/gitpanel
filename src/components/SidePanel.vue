@@ -21,6 +21,7 @@ const emit = defineEmits<{
   (e: 'compare', name: string): void
   (e: 'checkout', name: string): void
   (e: 'delete-remote', name: string): void
+  (e: 'manage-remotes'): void
 }>()
 
 /** 分支名 → 上游/领先/落后 */
@@ -285,14 +286,17 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
 
       <!-- 远端分支树（按远端分组：origin > feature > x） -->
       <div v-if="remoteCount">
-        <button
-          class="flex w-full items-center gap-1 px-3 py-1 text-[11px] font-medium uppercase tracking-wide t3"
-          @click="open.remote = !open.remote"
-        >
-          <span class="text-[9px]">{{ open.remote ? '▾' : '▸' }}</span>
-          远端分支
-          <span class="ml-1 opacity-60">{{ remoteCount }}</span>
-        </button>
+        <div class="flex items-center pr-2">
+          <button
+            class="flex flex-1 items-center gap-1 px-3 py-1 text-[11px] font-medium uppercase tracking-wide t3"
+            @click="open.remote = !open.remote"
+          >
+            <span class="text-[9px]">{{ open.remote ? '▾' : '▸' }}</span>
+            远端分支
+            <span class="ml-1 opacity-60">{{ remoteCount }}</span>
+          </button>
+          <IconButton compact name="settings" title="管理远端仓库（新增 / 改地址 / 删除）" :size="12" @click="emit('manage-remotes')" />
+        </div>
         <div v-show="open.remote">
           <div
             v-for="row in remoteRows"

@@ -110,6 +110,18 @@ export const api = {
     return post<{ remotes: RemoteInfo[] }>('/api/remotes', { path })
   },
 
+  addRemote(path: string, name: string, url: string): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/remote-add', { path, name, url })
+  },
+
+  setRemoteUrl(path: string, name: string, url: string): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/remote-set-url', { path, name, url })
+  },
+
+  removeRemote(path: string, name: string): Promise<{ ok: boolean }> {
+    return post<{ ok: boolean }>('/api/remote-remove', { path, name })
+  },
+
   checkout(path: string, ref: string): Promise<{ ok: boolean; branch: string }> {
     return post<{ ok: boolean; branch: string }>('/api/checkout', { path, ref })
   },
@@ -156,8 +168,8 @@ export const api = {
   fetch(path: string): Promise<SyncResult> {
     return post<SyncResult>('/api/fetch', { path })
   },
-  pull(path: string): Promise<SyncResult> {
-    return post<SyncResult>('/api/pull', { path })
+  pull(path: string, strategy: 'merge' | 'rebase' | 'ff-only' = 'merge'): Promise<SyncResult> {
+    return post<SyncResult>('/api/pull', { path, strategy })
   },
   push(path: string, force = false): Promise<SyncResult> {
     return post<SyncResult>('/api/push', { path, force })
@@ -374,6 +386,14 @@ export const api = {
   /* ── 文件历史 / Blame / 体检 ── */
   fileHistory(path: string, file: string, limit = 200): Promise<{ file: string; commits: FileHistoryEntry[] }> {
     return post<{ file: string; commits: FileHistoryEntry[] }>('/api/file-history', { path, file, limit })
+  },
+
+  searchHistory(
+    path: string,
+    query: string,
+    limit = 200,
+  ): Promise<{ query: string; hits: FileHistoryEntry[] }> {
+    return post<{ query: string; hits: FileHistoryEntry[] }>('/api/search-history', { path, query, limit })
   },
   blame(path: string, file: string, max = 2000): Promise<{ file: string; lines: BlameLine[]; truncated?: boolean }> {
     return post<{ file: string; lines: BlameLine[]; truncated?: boolean }>('/api/blame', { path, file, max })

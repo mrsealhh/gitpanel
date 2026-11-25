@@ -162,6 +162,39 @@ impl Repo {
         Ok(out)
     }
 
+    fn validate_remote(name: &str, url: &str) -> Result<()> {
+        let n = name.trim();
+        if n.is_empty() || n.starts_with('-') || !valid_ref(n) {
+            bail!("非法的远端名称");
+        }
+        let u = url.trim();
+        if u.is_empty() || u.starts_with('-') {
+            bail!("非法的远端地址");
+        }
+        Ok(())
+    }
+
+    pub fn add_remote(&self, name: &str, url: &str) -> Result<()> {
+        Self::validate_remote(name, url)?;
+        git(self.path(), &["remote", "add", name.trim(), url.trim()])?;
+        Ok(())
+    }
+
+    pub fn set_remote_url(&self, name: &str, url: &str) -> Result<()> {
+        Self::validate_remote(name, url)?;
+        git(self.path(), &["remote", "set-url", name.trim(), url.trim()])?;
+        Ok(())
+    }
+
+    pub fn remove_remote(&self, name: &str) -> Result<()> {
+        let n = name.trim();
+        if n.is_empty() || n.starts_with('-') || !valid_ref(n) {
+            bail!("非法的远端名称");
+        }
+        git(self.path(), &["remote", "remove", n])?;
+        Ok(())
+    }
+
     pub fn checkout(&self, refname: &str) -> Result<ActionOutcome> {
         if !valid_ref(refname) {
             bail!("非法的引用名");

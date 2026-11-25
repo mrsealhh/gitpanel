@@ -9,6 +9,8 @@ const emit = defineEmits<{
   (e: 'close'): void
   (e: 'settings'): void
   (e: 'dashboard'): void
+  (e: 'remotes'): void
+  (e: 'history-search'): void
 }>()
 
 const repo = useRepoStore()
@@ -39,6 +41,20 @@ const items = computed<Item[]>(() => {
       title: '刷新提交历史',
       group: '仓库',
       run: () => repo.reload(),
+    },
+    {
+      id: 'remotes',
+      title: '管理远端仓库…',
+      hint: '新增 / 改地址 / 删除',
+      group: '仓库',
+      run: () => emit('remotes'),
+    },
+    {
+      id: 'history-search',
+      title: '搜索内容变更…',
+      hint: 'git log -S：哪次提交加了这行',
+      group: '仓库',
+      run: () => emit('history-search'),
     },
     {
       id: 'stash-create',
