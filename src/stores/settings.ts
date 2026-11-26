@@ -84,7 +84,7 @@ interface Persisted {
 
 function load(): Persisted {
   const fallback: Persisted = {
-    theme: 'dark',
+    theme: 'light',
     density: 'normal',
     relativeTime: true,
     showGraph: true,
@@ -211,7 +211,7 @@ export const useSettingsStore = defineStore('settings', {
     },
 
     reset() {
-      this.theme = 'dark'
+      this.theme = 'light'
       this.density = 'normal'
       this.relativeTime = true
       this.showGraph = true

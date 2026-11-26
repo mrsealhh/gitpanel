@@ -186,6 +186,32 @@ const pinnedRepos = computed(() =>
   ),
 )
 
+const dragPinned = ref('')
+
+function sameRepoPath(a?: string, b?: string) {
+  if (!a || !b) return false
+  return a.replace(/\\/g, '/').toLowerCase() === b.replace(/\\/g, '/').toLowerCase()
+}
+
+function onPinnedDragStart(path: string, e: DragEvent) {
+  dragPinned.value = path
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', path)
+  }
+}
+
+function onPinnedDrop(target: string) {
+  const from = pinnedRepos.value.findIndex((r) => r.path === dragPinned.value)
+  const to = pinnedRepos.value.findIndex((r) => r.path === target)
+  dragPinned.value = ''
+  if (from < 0 || to < 0 || from === to) return
+  const list = [...pinnedRepos.value]
+  const [item] = list.splice(from, 1)
+  list.splice(to, 0, item)
+  void repo.reorderPinned(list.map((r) => r.path))
+}
+
 /** 文档标签栏：编辑器 + diff 合并成一排，可横向滚动 */
 const docTabs = computed(() =>
   [
@@ -999,6 +1025,18 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
+    <!-- 打开仓库时的交互等待，避免连续切换仓库时旧数据/请求互相覆盖 -->
+    <div
+      v-if="repo.opening"
+      class="fixed inset-0 z-[45] flex items-center justify-center"
+      :style="{ background: 'rgba(0,0,0,.22)' }"
+    >
+      <div class="modal animate-pop flex items-center gap-3 px-5 py-3 text-[12px] t2">
+        <span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-r-transparent" :style="{ color: 'var(--accent)' }" />
+        正在打开仓库…
+      </div>
+    </div>
+
     <!-- 置顶仓库快速切换 tab，超出横向滚动 -->
     <div
       v-if="pinnedRepos.length"
@@ -1009,17 +1047,33 @@ onBeforeUnmount(() => {
         <button
           v-for="r in pinnedRepos"
           :key="r.path"
-          class="flex h-6 shrink-0 items-center gap-1 rounded px-2 text-[11px]"
+          draggable="true"
+          class="group flex h-6 shrink-0 cursor-grab items-center gap-1 rounded px-2 text-[11px] active:cursor-grabbing"
+          :class="dragPinned === r.path ? 'opacity-40' : ''"
           :style="
-            r.path === repo.info?.path
-              ? { background: 'var(--accent-weak)', color: 'var(--accent)' }
+            sameRepoPath(r.path, repo.info?.path)
+              ? {
+                  background: 'var(--accent-weak)',
+                  color: 'var(--accent)',
+                  boxShadow: 'inset 0 -2px 0 var(--accent)',
+                }
               : { color: 'var(--text-dim)' }
           "
-          :title="r.path"
+          :title="`${r.path}\n拖拽可调整顺序`"
           @click="openPath(r.path)"
+          @dragstart="onPinnedDragStart(r.path, $event)"
+          @dragover.prevent
+          @drop.prevent="onPinnedDrop(r.path)"
         >
           <Icon name="pin" :size="10" class="shrink-0 opacity-60" />
           <span class="max-w-[160px] truncate">{{ r.alias || r.name }}</span>
+          <span
+            class="ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded opacity-0 hover:bg-[var(--hover)] group-hover:opacity-70"
+            title="取消置顶"
+            @click.stop="repo.pinRecent(r.path, false)"
+          >
+            <Icon name="close" :size="9" />
+          </span>
         </button>
       </div>
       <IconButton compact name="settings" title="整理仓库 / 分组" :size="13" @click="showRepoManager = true" />
@@ -1453,7 +1507,7 @@ onBeforeUnmount(() => {
     <transition name="fade">
       <div
         v-if="repo.notice"
-        class="fixed bottom-12 right-4 z-[60] max-w-[380px] cursor-pointer rounded-lg px-3 py-2 text-[12px] shadow-lg"
+        class="fixed left-1/2 top-[84px] z-[60] max-w-[520px] -translate-x-1/2 cursor-pointer rounded-lg px-3 py-2 text-center text-[12px] shadow-lg"
         :style="noticeClass"
         :title="'点击查看操作日志与完整原因'"
         @click="repo.logOpen = true"

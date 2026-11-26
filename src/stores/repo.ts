@@ -99,6 +99,17 @@ function countLines(text: string): number {
   return n + 1
 }
 
+/** 给单个仓库的统计加超时，避免一个大仓库卡住整个看板 */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: number | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error('统计超时')), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) window.clearTimeout(timer)
+  }) as Promise<T>
+}
+
 function joinChunk(head: string, tail: string): string {
   if (!tail) return head
   if (!head) return tail
@@ -127,6 +138,7 @@ export const useRepoStore = defineStore('repo', {
     nextOffset: 0,
     done: false,
     loading: false,
+    opening: false,
     loadingMore: false,
     error: '',
     tip: '',
@@ -206,6 +218,7 @@ export const useRepoStore = defineStore('repo', {
     // 多仓库看板
     overview: [] as RepoOverview[],
     overviewLoading: false,
+    overviewProgress: { done: 0, total: 0 },
 
     // 项目 / 身份
     identity: { name: '', email: '' },
@@ -256,6 +269,7 @@ export const useRepoStore = defineStore('repo', {
   actions: {
     async open(path: string) {
       this.loading = true
+      this.opening = true
       this.error = ''
       // 切换仓库时清掉上一个仓库的筛选 / 选中 / 标签页，避免拿旧 ref 去查新仓库
       this.tip = ''
@@ -300,6 +314,7 @@ export const useRepoStore = defineStore('repo', {
         this.error = String((e as Error).message || e)
       } finally {
         this.loading = false
+        this.opening = false
       }
     },
 
@@ -402,6 +417,15 @@ export const useRepoStore = defineStore('repo', {
       siblings.splice(target, 0, item)
       for (let i = 0; i < siblings.length; i += 1) {
         await recentOrganize(siblings[i].path, siblings[i].groupPath, i)
+      }
+      await this.loadRecents()
+    },
+
+    /** 顶部置顶 tab 拖拽排序 */
+    async reorderPinned(paths: string[]) {
+      for (let i = 0; i < paths.length; i += 1) {
+        const r = this.recents.find((x) => x.path === paths[i])
+        if (r) await recentOrganize(r.path, r.groupPath, i)
       }
       await this.loadRecents()
     },
@@ -1559,6 +1583,8 @@ export const useRepoStore = defineStore('repo', {
 
     async loadOverview() {
       this.overviewLoading = true
+      this.overview = []
+      this.overviewProgress = { done: 0, total: 0 }
       try {
         const recents = await recentList()
         const paths = recents.map((r) => r.path)
@@ -1566,7 +1592,30 @@ export const useRepoStore = defineStore('repo', {
           this.overview = []
           return
         }
-        this.overview = (await api.reposOverview(paths)).repos
+        this.overviewProgress = { done: 0, total: paths.length }
+        // 逐个仓库统计并立即追加，先出来的先展示；单个仓库超时不影响其它仓库
+        for (let i = 0; i < paths.length; i += 1) {
+          const path = paths[i]
+          const name = recents.find((r) => r.path === path)?.alias || recents.find((r) => r.path === path)?.name || path
+          try {
+            const r = await withTimeout(api.reposOverview([path]), 12_000)
+            if (r.repos[0]) this.overview.push(r.repos[0])
+          } catch (e) {
+            this.overview.push({
+              path,
+              name,
+              exists: true,
+              branch: '',
+              ahead: 0,
+              behind: 0,
+              dirty: 0,
+              lastCommit: 0,
+              worktrees: 0,
+              error: String((e as Error).message || e),
+            })
+          }
+          this.overviewProgress = { done: i + 1, total: paths.length }
+        }
       } catch (e) {
         this.overview = []
         this.notify('err', String((e as Error).message || e))

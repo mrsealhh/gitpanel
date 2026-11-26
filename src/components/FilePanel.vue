@@ -198,6 +198,27 @@ function onCtx(e: MouseEvent, file: string, isDir = false) {
   emit('file-context', { file, isDir, x: e.clientX, y: e.clientY })
 }
 
+/** 把内容搜索命中的片段拆出来，用 <mark> 高亮 */
+function highlightParts(text: string, query: string) {
+  const q = query.trim()
+  if (!q) return [{ text, hit: false }]
+  const hay = text.toLowerCase()
+  const needle = q.toLowerCase()
+  const parts: { text: string; hit: boolean }[] = []
+  let i = 0
+  while (i <= text.length) {
+    const at = hay.indexOf(needle, i)
+    if (at < 0) {
+      if (i < text.length) parts.push({ text: text.slice(i), hit: false })
+      break
+    }
+    if (at > i) parts.push({ text: text.slice(i, at), hit: false })
+    parts.push({ text: text.slice(at, at + q.length), hit: true })
+    i = at + q.length
+  }
+  return parts
+}
+
 /** 展开某个文件的所有父目录，便于回到文件页签时自动定位 */
 async function reveal(path: string) {
   if (!path) return
@@ -344,7 +365,16 @@ onMounted(() => {
               @contextmenu="onCtx($event, h.file)"
             >
               <span class="shrink-0 font-mono text-[10px] opacity-70">{{ h.name }}:{{ h.line }}</span>
-              <span class="min-w-0 flex-1 truncate font-mono">{{ h.text }}</span>
+              <span class="min-w-0 flex-1 truncate font-mono">
+                <template v-for="(p, i) in highlightParts(h.text, q)" :key="i">
+                  <mark
+                    v-if="p.hit"
+                    class="rounded px-0.5"
+                    :style="{ background: 'var(--accent-weak)', color: 'var(--accent)' }"
+                  >{{ p.text }}</mark>
+                  <span v-else>{{ p.text }}</span>
+                </template>
+              </span>
             </button>
           </div>
           <div v-if="!hits.length && !hitsLoading" class="px-3 py-2 text-[11px] t3">没有匹配的文件内容</div>

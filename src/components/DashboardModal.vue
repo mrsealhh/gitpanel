@@ -25,13 +25,19 @@ function drift(r: { ahead: number; behind: number }) {
       <header class="line-b flex items-center gap-2 px-4 py-3">
         <span class="text-[13px] font-semibold t1">多仓库看板</span>
         <span class="text-[11px] t3">最近打开的仓库，一次看清漂移与脏改动</span>
+        <span v-if="repo.overviewLoading" class="inline-flex items-center gap-1 text-[10px]" :style="{ color: 'var(--accent)' }">
+          <span class="inline-block h-2 w-2 animate-spin rounded-full border border-current border-r-transparent" />
+          {{ repo.overviewProgress.done }} / {{ repo.overviewProgress.total }}
+        </span>
         <button class="btn ml-auto px-2 py-1 text-[11px]" @click="emit('manage'); emit('close')">整理 / 分组</button>
         <IconButton name="refresh" title="刷新" :size="14" @click="repo.loadOverview()" />
         <button class="btn" @click="emit('close')">关闭</button>
       </header>
 
       <div class="min-h-0 flex-1 overflow-y-auto">
-        <div v-if="repo.overviewLoading" class="p-6 text-center text-[12px] t3">正在统计（仓库多时需要几秒）…</div>
+        <div v-if="repo.overviewLoading && !repo.overview.length" class="p-6 text-center text-[12px] t3">
+          正在统计（仓库多时需要几秒）…
+        </div>
         <div v-else-if="!repo.overview.length" class="p-6 text-center text-[12px] t3">
           还没有最近打开的仓库，可以用「整理 / 分组」里的扫描文件夹批量导入
         </div>

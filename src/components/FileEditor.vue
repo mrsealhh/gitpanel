@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { EditorView, lineNumbers, keymap } from '@codemirror/view'
-import { EditorState } from '@codemirror/state'
+import { EditorView, lineNumbers, keymap, Decoration, type DecorationSet } from '@codemirror/view'
+import { EditorState, StateEffect, StateField } from '@codemirror/state'
 import { defaultKeymap, indentWithTab } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
@@ -50,12 +50,36 @@ const matchCount = ref(0)
 const matchIndex = ref(0)
 let matchPositions: number[] = []
 
-function computeMatches() {
+/** 所有搜索匹配的高亮装饰（当前匹配仍用原生选区强调） */
+const setSearchMatches = StateEffect.define<{ from: number; to: number }[]>()
+const searchMatchField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    let next = deco.map(tr.changes)
+    for (const e of tr.effects) {
+      if (e.is(setSearchMatches)) {
+        next = Decoration.set(
+          e.value.map(({ from, to }) => Decoration.mark({ class: 'cm-searchMatch' }).range(from, to)),
+          true,
+        )
+      }
+    }
+    return next
+  },
+  provide: (f) => EditorView.decorations.from(f),
+})
+
+function clearSearchMatches() {
+  matchPositions = []
+  matchCount.value = 0
+  view?.dispatch({ effects: setSearchMatches.of([]) })
+}
+
+function computeMatches(jump = true) {
   const v = view
   const q = query.value
   if (!v || !q) {
-    matchCount.value = 0
-    matchPositions = []
+    clearSearchMatches()
     return
   }
   const doc = v.state.doc.toString()
@@ -70,7 +94,10 @@ function computeMatches() {
   matchPositions = hits
   matchCount.value = hits.length
   if (matchIndex.value >= hits.length) matchIndex.value = 0
-  jumpTo(matchIndex.value)
+  v.dispatch({
+    effects: setSearchMatches.of(hits.map((from) => ({ from, to: from + q.length }))),
+  })
+  if (jump) jumpTo(matchIndex.value)
 }
 
 function jumpTo(idx: number) {
@@ -100,6 +127,7 @@ function openSearch() {
 
 function closeSearch() {
   searchOpen.value = false
+  clearSearchMatches()
   view?.focus()
 }
 
@@ -140,6 +168,10 @@ function themeExtensions(): Extension {
       '.cm-activeLine': { backgroundColor: cssVar('--panel-2', '#0e1117') + '80' },
       '.cm-activeLineGutter': { backgroundColor: cssVar('--panel-2', '#0e1117') },
       '.cm-selectionBackground': { backgroundColor: cssVar('--accent-weak', '') + ' !important' },
+      '.cm-searchMatch': {
+        backgroundColor: 'rgba(250, 204, 21, .38)',
+        borderRadius: '2px',
+      },
     },
     { dark },
   )
@@ -199,6 +231,7 @@ async function build() {
         EditorView.lineWrapping,
         themeExtensions(),
         syntaxHighlighting(highlight),
+        searchMatchField,
         lang,
         EditorView.editable.of(!readOnly),
         EditorState.readOnly.of(readOnly),
@@ -233,7 +266,15 @@ async function build() {
           ...defaultKeymap,
         ]),
         EditorView.updateListener.of((u) => {
-          if (u.docChanged) emit('change', u.state.doc.toString())
+          if (u.docChanged) {
+            emit('change', u.state.doc.toString())
+            if (searchOpen.value && query.value) {
+              // 续读/外部更新后重新计算匹配位置（避免装饰错位）
+              window.setTimeout(() => {
+                if (searchOpen.value && query.value) computeMatches(false)
+              }, 0)
+            }
+          }
         }),
       ],
     }),
@@ -328,7 +369,7 @@ onBeforeUnmount(() => {
         v-model="query"
         class="field w-[220px] px-2 py-0.5 text-[11px]"
         placeholder="输入关键字，回车下一个"
-        @input="computeMatches"
+        @input="computeMatches()"
         @keydown.enter.prevent="step(1)"
         @keydown.esc.prevent="closeSearch"
       />
