@@ -353,6 +353,9 @@ export const api = {
     return post<{ worktrees: WorktreeInfo[] }>('/api/worktrees', { path })
   },
   worktreeMetaList(path: string): Promise<{ meta: Record<string, WorktreeMeta> }> {
+    if (isTauri) {
+      return invoke<Record<string, WorktreeMeta>>('worktree_meta_list').then((meta) => ({ meta }))
+    }
     return post<{ meta: Record<string, WorktreeMeta> }>('/api/worktree-meta-list', { path })
   },
   worktreeMetaSet(
@@ -362,12 +365,22 @@ export const api = {
     note = '',
     task = '',
   ): Promise<{ ok: boolean }> {
+    if (isTauri) {
+      return invoke('worktree_meta_set', { path: wtPath, agent, note, task }).then(() => ({ ok: true }))
+    }
     return post<{ ok: boolean }>('/api/worktree-meta-set', { path, wtPath, agent, note, task })
   },
   worktreeMetaTouch(path: string, wtPath: string): Promise<{ ok: boolean }> {
+    if (isTauri) {
+      return invoke('worktree_meta_touch', { path: wtPath }).then(() => ({ ok: true }))
+    }
     return post<{ ok: boolean }>('/api/worktree-meta-touch', { path, wtPath })
   },
   reposOverview(paths: string[]): Promise<{ repos: RepoOverview[] }> {
+    // 桌面态走独立 Tauri 命令；它没有当前仓库 path，不能走通用 git_call
+    if (isTauri) {
+      return invoke<RepoOverview[]>('repos_overview', { paths }).then((repos) => ({ repos }))
+    }
     return post<{ repos: RepoOverview[] }>('/api/repos-overview', { paths })
   },
   addWorktree(

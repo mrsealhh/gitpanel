@@ -101,11 +101,36 @@
 | 平台 | 文件 |
 |---|---|
 | Windows 10/11 (x64) | `GitPanel_*_x64-setup.exe`（NSIS，支持自动更新） |
-| macOS (Apple Silicon / Intel) | `GitPanel_*.dmg` |
+| macOS (Apple Silicon) | `GitPanel_*_aarch64.dmg` |
+| macOS (Intel) | 暂未提供预编译包，可从源码构建 |
 | Linux (x64) | `*.AppImage` / `*.deb` |
 
 要求本机已安装 `git` 并加入 `PATH`。首次克隆私有仓库时，凭据由系统 Git 凭据管理器处理，
 GitPanel 自身不保存账号密码。
+
+### macOS 未签名版说明
+
+当前 macOS 包**没有 Apple Developer ID 签名和公证**（需要 $99/年开发者账号）。
+首次打开可能提示「无法验证开发者」或「已损坏」，这是 Gatekeeper 的隔离属性，不是文件真的损坏。
+
+任选一种方式打开：
+
+1. 右键 `GitPanel.app` → 打开 → 再点「打开」（macOS 14 及更早）。
+2. macOS 15：双击被拦截后，打开 **系统设置 → 隐私与安全性 → 仍要打开**。
+3. 终端执行（推荐）：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/GitPanel.app
+```
+
+4. 如果仍提示签名问题，可本地 ad-hoc 签名后重开：
+
+```bash
+codesign --force --deep --sign - /Applications/GitPanel.app
+```
+
+没有付费开发者账号不影响使用，只是首次安装需要手动放行；想彻底消除警告才需要
+Apple Developer Program（$99/年）+ Developer ID 签名 + 公证。
 
 ## 开发
 
