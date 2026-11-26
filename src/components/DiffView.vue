@@ -3,11 +3,11 @@ import { onBeforeUnmount, onMounted, ref, watch, computed } from 'vue'
 import { MergeView } from '@codemirror/merge'
 import { EditorView, lineNumbers } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
-import { tags } from '@lezer/highlight'
+import { syntaxHighlighting } from '@codemirror/language'
 import type { Extension } from '@codemirror/state'
 import type { FileDiff } from '../api/types'
 import { useSettingsStore } from '../stores/settings'
+import { codeHighlight } from '../lib/codeHighlight'
 import IconButton from './IconButton.vue'
 import { languageFor as loadLanguage } from '../lib/lang'
 
@@ -28,6 +28,7 @@ const emit = defineEmits<{
 
 const settings = useSettingsStore()
 const host = ref<HTMLElement | null>(null)
+const ignoreWhitespace = ref(false)
 let view: MergeView | null = null
 let seq = 0
 /** 两侧滚动同步的清理函数（重建/关闭时调用） */
@@ -67,18 +68,6 @@ function countLines(text: string): number {
   return n + 1
 }
 
-const highlight = HighlightStyle.define([
-  { tag: tags.comment, color: '#6b7688', fontStyle: 'italic' },
-  { tag: tags.keyword, color: '#c084fc' },
-  { tag: [tags.string, tags.special(tags.string)], color: '#4ade80' },
-  { tag: [tags.number, tags.bool, tags.null], color: '#fbbf24' },
-  { tag: [tags.function(tags.variableName), tags.labelName], color: '#60a5fa' },
-  { tag: [tags.typeName, tags.className], color: '#2dd4bf' },
-  { tag: tags.propertyName, color: '#7dd3fc' },
-  { tag: [tags.operator, tags.punctuation], color: '#94a3b8' },
-  { tag: tags.heading, color: '#f0abfc', fontWeight: '600' },
-])
-
 function cssVar(name: string, fallback: string) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   return v || fallback
@@ -117,7 +106,7 @@ function baseExtensions(): Extension[] {
     EditorView.editable.of(false),
     EditorState.readOnly.of(true),
     themeExtensions(),
-    syntaxHighlighting(highlight),
+    syntaxHighlighting(codeHighlight(settings.theme)),
   ]
 }
 
@@ -202,9 +191,19 @@ async function build() {
 
   destroy()
   const ext = [...baseExtensions(), lang]
+  const normalize = (text: string) => {
+    let s = text.replace(/\r\n?/g, '\n').replace(/^\uFEFF/, '')
+    if (!ignoreWhitespace.value) return s
+    const lines = s.split('\n')
+    const indents = lines
+      .filter((l) => l.trim())
+      .map((l) => l.match(/^[ \t]*/)?.[0].length ?? 0)
+    const cut = indents.length ? Math.min(...indents) : 0
+    return lines.map((l) => (l.trim() ? l.slice(cut).replace(/[ \t]+$/, '') : '')).join('\n')
+  }
   view = new MergeView({
-    a: { doc: props.diff.oldText, extensions: ext },
-    b: { doc: props.diff.newText, extensions: ext },
+    a: { doc: normalize(props.diff.oldText), extensions: ext },
+    b: { doc: normalize(props.diff.newText), extensions: ext },
     parent: host.value,
     collapseUnchanged: { margin: 3, minSize: 5 },
     highlightChanges: true,
@@ -220,7 +219,7 @@ async function build() {
   }
 }
 
-watch(() => [props.diff, props.file, settings.theme], build, { deep: false })
+watch(() => [props.diff, props.file, settings.theme, ignoreWhitespace.value], build, { deep: false })
 onMounted(build)
 onBeforeUnmount(() => {
   seq++
@@ -251,6 +250,14 @@ onBeforeUnmount(() => {
         @click="emit('load-more')"
       >
         {{ loading ? '加载中…' : settings.diffMaxLines ? `继续加载 ${settings.diffMaxLines} 行` : '加载全部' }}
+      </button>
+      <button
+        class="btn shrink-0 whitespace-nowrap"
+        :style="ignoreWhitespace ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}"
+        title="忽略行首统一缩进和行尾空白；用于只看真实代码改动"
+        @click="ignoreWhitespace = !ignoreWhitespace"
+      >
+        忽略空白
       </button>
       <div class="ml-auto flex shrink-0 items-center gap-1">
         <IconButton
@@ -305,9 +312,21 @@ onBeforeUnmount(() => {
 .cm-changedLine {
   background: var(--diff-change) !important;
 }
+.cm-mergeViewEditor:first-child .cm-changedLine {
+  background: var(--diff-delete) !important;
+}
+.cm-mergeViewEditor:last-child .cm-changedLine {
+  background: var(--diff-insert) !important;
+}
 .cm-changedText {
   background: var(--diff-change-strong) !important;
   border-radius: 2px;
+}
+.cm-mergeViewEditor:first-child .cm-changedText {
+  background: var(--diff-delete-strong) !important;
+}
+.cm-mergeViewEditor:last-child .cm-changedText {
+  background: var(--diff-insert-strong) !important;
 }
 .cm-insertedLine {
   background: var(--diff-insert) !important;

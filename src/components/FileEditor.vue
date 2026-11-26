@@ -3,10 +3,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { EditorView, lineNumbers, keymap, Decoration, type DecorationSet } from '@codemirror/view'
 import { EditorState, StateEffect, StateField } from '@codemirror/state'
 import { defaultKeymap, indentWithTab } from '@codemirror/commands'
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
-import { tags } from '@lezer/highlight'
+import { syntaxHighlighting } from '@codemirror/language'
 import type { Extension } from '@codemirror/state'
 import { languageFor } from '../lib/lang'
+import { codeHighlight } from '../lib/codeHighlight'
 import { useSettingsStore } from '../stores/settings'
 import Icon from './Icon.vue'
 import IconButton from './IconButton.vue'
@@ -131,17 +131,6 @@ function closeSearch() {
   view?.focus()
 }
 
-const highlight = HighlightStyle.define([
-  { tag: tags.comment, color: '#6b7688', fontStyle: 'italic' },
-  { tag: tags.keyword, color: '#c084fc' },
-  { tag: [tags.string, tags.special(tags.string)], color: '#4ade80' },
-  { tag: [tags.number, tags.bool, tags.null], color: '#fbbf24' },
-  { tag: [tags.function(tags.variableName), tags.labelName], color: '#60a5fa' },
-  { tag: [tags.typeName, tags.className], color: '#2dd4bf' },
-  { tag: tags.propertyName, color: '#7dd3fc' },
-  { tag: [tags.operator, tags.punctuation], color: '#94a3b8' },
-])
-
 function cssVar(name: string, fallback: string) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   return v || fallback
@@ -230,7 +219,7 @@ async function build() {
         lineNumbers(),
         EditorView.lineWrapping,
         themeExtensions(),
-        syntaxHighlighting(highlight),
+        syntaxHighlighting(codeHighlight(settings.theme)),
         searchMatchField,
         lang,
         EditorView.editable.of(!readOnly),

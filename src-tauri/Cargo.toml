@@ -1,6 +1,6 @@
 [package]
 name = "gitpanel"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 description = "本地 Git 可视化管理面板"
 
