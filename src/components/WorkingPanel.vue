@@ -284,6 +284,15 @@ function rowStyle(zone: Zone, path: string) {
           <input v-model="repo.amend" type="checkbox" class="h-3 w-3 accent-[var(--accent)]" />
           amend
         </label>
+        <label class="flex cursor-pointer items-center gap-1 text-[11px] t3" title="提交成功后自动 push 当前分支">
+          <input
+            v-model="settings.autoPushAfterCommit"
+            type="checkbox"
+            class="h-3 w-3 accent-[var(--accent)]"
+            @change="settings.save()"
+          />
+          提交后推送
+        </label>
         <span class="text-[10px] t3">Ctrl 点击可多选文件</span>
         <button
           class="btn btn-primary ml-auto px-3 py-1 text-[12px]"

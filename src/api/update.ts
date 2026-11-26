@@ -1,4 +1,4 @@
-export const APP_VERSION = '0.4.1'
+export const APP_VERSION = '0.4.2'
 export const REPO_URL = 'https://github.com/mrsealhh/gitpanel'
 export const RELEASES_URL = `${REPO_URL}/releases`
 

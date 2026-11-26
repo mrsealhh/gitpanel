@@ -243,6 +243,18 @@ const updateStatus = computed(() => {  switch (update.phase) {
           <p class="mt-1 text-[11px] leading-relaxed t3">
             Pull 时会自动 autostash。Merge 保留合并提交；Rebase 把本地提交接到远端后面；FF-only 不能快进时直接报错。
           </p>
+          <label class="flex cursor-pointer items-center justify-between py-1.5">
+            <span class="text-[12px] t2">提交成功后自动 push 当前分支</span>
+            <input
+              v-model="settings.autoPushAfterCommit"
+              type="checkbox"
+              class="h-4 w-4 accent-[var(--accent)]"
+              @change="saveToggle('提交后自动推送', settings.autoPushAfterCommit)"
+            />
+          </label>
+          <p class="mt-1 text-[11px] leading-relaxed t3">
+            开启后每次提交完成会自动推送；没有上游时自动 --set-upstream。推送失败不会回滚提交。
+          </p>
         </section>
 
         <section class="mb-6">

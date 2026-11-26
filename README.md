@@ -52,7 +52,7 @@
 **改动与提交**
 - 工作区三态（已暂存 / 未暂存 / 未跟踪）+ 冲突文件一眼可见
 - **按 diff 块暂存 / 取消暂存 / 丢弃**，也可以整文件操作
-- 多段提交信息、amend、`Ctrl+Enter` 提交
+- 多段提交信息、amend、`Ctrl+Enter` 提交；可开启「提交后自动推送」
 - 并排 Diff（CodeMirror 6 MergeView），未变更段落自动折叠，左右滚动同步
 - 大文件 Diff 滚动到底部自动续读下一段，也可以手动「继续加载」
 
@@ -62,7 +62,7 @@
 - 每个分支显示上游 ahead / behind；当前分支下方常驻抓取 / 拉取 / 推送
 - Pull 策略可配：merge / rebase / ff-only，自动 autostash
 - 检出 `origin/xxx` 自动建同名本地跟踪分支；远端分支也可直接签出或删除
-- 分支右键：合并、交互式 rebase、重命名、删除（可一并删除远端分支）
+- 分支右键：从该分支新建分支、合并、交互式 rebase、重命名、删除（可联动删除远端分支）
 - 推送时自动 `--set-upstream`，不再被 "no upstream branch" 卡住
 - Cherry-pick / Revert，冲突后「继续 / 跳过 / 中止」
 

@@ -529,6 +529,7 @@ function onDeleteRemoteBranch(name: string) {
 function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
   const isTag = ref.kind === 'tag'
   const isRemote = ref.kind === 'remote'
+  const upstream = repo.branchStatus.find((b) => b.name === ref.name)?.upstream || ''
   const items: MenuItem[] = isTag
     ? [
         { id: 'delete-tag', label: '删除标签', danger: true },
@@ -536,6 +537,7 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
       ]
     : isRemote
       ? [
+          { id: 'new-branch', label: '从此远端分支新建本地分支…' },
           { id: 'checkout', label: '签出为本地分支（自动跟踪）' },
           { id: 'compare', label: '与当前 HEAD 对比' },
           { id: 'divider', label: '', divider: true },
@@ -545,6 +547,7 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
           { id: 'copy-name', label: '复制名称' },
         ]
       : [
+          { id: 'new-branch', label: '从此分支新建分支…' },
           { id: 'checkout', label: '检出此分支' },
           { id: 'merge', label: '合并到当前分支' },
           { id: 'rebase-onto', label: '交互式 rebase 到此分支' },
@@ -555,6 +558,7 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
           { id: 'divider3', label: '', divider: true },
           { id: 'rename', label: '重命名…' },
           { id: 'delete', label: '删除分支', danger: true },
+          { id: 'delete-both', label: '删除分支及远端…', danger: true },
           { id: 'divider2', label: '', divider: true },
           { id: 'copy-name', label: '复制名称' },
         ]
@@ -564,7 +568,15 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
     y,
     items,
     handler: async (id) => {
-      if (id === 'checkout') await repo.checkoutRef(ref.name)
+      if (id === 'new-branch') {
+        prompt.value = {
+          title: '新建分支',
+          label: `从 ${ref.name} 新建并切换`,
+          placeholder: 'feature/my-branch',
+          confirmText: '创建分支',
+          onSubmit: (name) => repo.createBranch(name, ref.name),
+        }
+      } else if (id === 'checkout') await repo.checkoutRef(ref.name)
       else if (id === 'compare') await repo.openCompare(ref.name, 'HEAD')
       else if (id === 'delete-remote') {
         if (settings.confirmDangerous && !window.confirm(`确定删除远端分支 ${ref.name}？\n会执行 git push --delete。`)) return
@@ -587,14 +599,22 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
         }
       } else if (id === 'delete') {
         if (!window.confirm(`确定删除分支 ${ref.name}？\n（会先自动打安全网快照）`)) return
-        await repo.deleteBranch(ref.name)
-        const hasRemote = (repo.branchStatus.find((b) => b.name === ref.name)?.upstream ?? '') !== ''
+        const ok = await repo.deleteBranch(ref.name)
         if (
-          hasRemote &&
-          window.confirm(`是否同时删除远端分支 ${ref.name}？\n这会执行 git push <remote> --delete ${ref.name}`)
+          ok &&
+          upstream &&
+          window.confirm(`是否同时删除远端分支 ${upstream}？\n这会执行 git push --delete ${upstream}`)
         ) {
-          await repo.deleteRemoteBranch(ref.name)
+          await repo.deleteRemoteBranch(upstream)
         }
+      } else if (id === 'delete-both') {
+        if (!upstream) {
+          repo.notify('info', `分支 ${ref.name} 没有关联远端，只删除本地即可`)
+          return
+        }
+        if (!window.confirm(`确定删除本地分支 ${ref.name} 和远端分支 ${upstream}？\n（会先自动打安全网快照）`)) return
+        const ok = await repo.deleteBranch(ref.name)
+        if (ok) await repo.deleteRemoteBranch(upstream)
       } else if (id === 'delete-tag') {
         if (!window.confirm(`确定删除标签 ${ref.name}？`)) return
         await repo.deleteTag(ref.name)

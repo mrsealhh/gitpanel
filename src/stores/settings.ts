@@ -75,6 +75,8 @@ interface Persisted {
   pullStrategy: 'merge' | 'rebase' | 'ff-only'
   /** 仓库列表排序：manual 手动 / name 名称 / recent 最近打开 */
   repoSort: 'manual' | 'name' | 'recent'
+  /** 提交成功后自动 push 当前分支 */
+  autoPushAfterCommit: boolean
   /** 底部工作区面板：高度 / 是否展开 */
   workDockHeight: number
   workDockOpen: boolean
@@ -104,6 +106,7 @@ function load(): Persisted {
     logRetentionDays: 30,
     pullStrategy: 'merge',
     repoSort: 'manual',
+    autoPushAfterCommit: false,
     workDockHeight: 280,
     workDockOpen: true,
   }
@@ -171,6 +174,7 @@ export const useSettingsStore = defineStore('settings', {
         logRetentionDays,
         pullStrategy,
         repoSort,
+        autoPushAfterCommit,
         workDockHeight,
         workDockOpen,
       } = this
@@ -199,6 +203,7 @@ export const useSettingsStore = defineStore('settings', {
           logRetentionDays,
           pullStrategy,
           repoSort,
+          autoPushAfterCommit,
           workDockHeight,
           workDockOpen,
         }),
@@ -228,6 +233,7 @@ export const useSettingsStore = defineStore('settings', {
       this.logRetentionDays = 30
       this.pullStrategy = 'merge'
       this.repoSort = 'manual'
+      this.autoPushAfterCommit = false
       this.workDockHeight = 280
       this.workDockOpen = true
       this.applyTheme()

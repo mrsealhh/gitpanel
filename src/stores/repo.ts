@@ -257,6 +257,30 @@ export const useRepoStore = defineStore('repo', {
     async open(path: string) {
       this.loading = true
       this.error = ''
+      // 切换仓库时清掉上一个仓库的筛选 / 选中 / 标签页，避免拿旧 ref 去查新仓库
+      this.tip = ''
+      this.search = ''
+      this.dateFrom = ''
+      this.dateTo = ''
+      this.selected = null
+      this.detail = null
+      this.editorTabs = []
+      this.diffTabs = []
+      this.activeTab = ''
+      this.compareBase = ''
+      this.compareA = ''
+      this.compareB = ''
+      this.compareFiles = []
+      this.compareOpen = false
+      this.snapshots = []
+      this.stashes = []
+      this.tags = []
+      this.reflog = []
+      this.conflict = null
+      this.conflictFile = ''
+      this.status = null
+      this.branchStatus = []
+      this.worktreeMeta = {}
       try {
         this.info = await api.openRepo(path)
         this.path = this.info.path
@@ -417,7 +441,20 @@ export const useRepoStore = defineStore('repo', {
       this.nextOffset = 0
       this.done = false
       try {
-        const page = await api.graph({ path: this.path, offset: 0, limit: PAGE_SIZE, tip: this.tip })
+        const page = await (async () => {
+          try {
+            return await api.graph({ path: this.path, offset: 0, limit: PAGE_SIZE, tip: this.tip })
+          } catch (e) {
+            const msg = String((e as Error).message || e)
+            // 旧仓库/已删除分支留下的筛选 ref：自动退回全部历史，避免一直报「无效的修订版本」
+            if (this.tip && /unknown revision|invalid reference|ambiguous argument|bad revision/i.test(msg)) {
+              this.tip = ''
+              this.notify('info', '之前的筛选提交已不存在，已自动回到全部提交')
+              return await api.graph({ path: this.path, offset: 0, limit: PAGE_SIZE, tip: '' })
+            }
+            throw e
+          }
+        })()
         this.rows = page.rows
         this.laneCount = page.laneCount
         this.nextOffset = page.nextOffset
@@ -1011,6 +1048,9 @@ export const useRepoStore = defineStore('repo', {
         await this.reload()
         const fresh = this.rows.find((x) => x.oid === r.oid)
         if (fresh) await this.select(fresh)
+        if (useSettingsStore().autoPushAfterCommit) {
+          await this.sync('push')
+        }
       } catch (e) {
         this.notify('err', String((e as Error).message || e))
       }
@@ -1296,16 +1336,18 @@ export const useRepoStore = defineStore('repo', {
       }
     },
 
-    async deleteBranch(name: string, force = false) {
-      if (!this.path) return
+    async deleteBranch(name: string, force = false): Promise<boolean> {
+      if (!this.path) return false
       try {
         await api.deleteBranch(this.path, name, force)
         this.notify('ok', `已删除分支 ${name}`)
         this.info = await api.openRepo(this.path)
         await this.reload()
         await this.loadBranchStatus()
+        return true
       } catch (e) {
         this.notify('err', String((e as Error).message || e))
+        return false
       }
     },
 
