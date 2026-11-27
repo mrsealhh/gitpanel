@@ -1,6 +1,6 @@
 [package]
 name = "gitpanel"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2021"
 description = "本地 Git 可视化管理面板"
 
@@ -8,7 +8,8 @@ description = "本地 Git 可视化管理面板"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
+tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"

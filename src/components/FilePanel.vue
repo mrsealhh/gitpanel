@@ -32,21 +32,123 @@ const matches = computed(() => {
   return allFiles.value.filter((f) => f.toLowerCase().includes(kw)).slice(0, 300)
 })
 
-/** 内容搜索命中：按目录分组，呈现成树状 */
-interface HitGroup {
-  dir: string
-  items: { file: string; name: string; line: number; text: string }[]
+/** 搜索结果统一按文件树展示（名称 / 内容共用） */
+interface SearchNode {
+  name: string
+  path: string
+  isDir: boolean
+  children: Map<string, SearchNode>
+  hits: { line: number; text: string }[]
 }
-const hitGroups = computed<HitGroup[]>(() => {
-  const map = new Map<string, HitGroup>()
-  for (const h of hits.value) {
-    const idx = h.file.lastIndexOf('/')
-    const dir = idx >= 0 ? h.file.slice(0, idx) : ''
-    const name = idx >= 0 ? h.file.slice(idx + 1) : h.file
-    if (!map.has(dir)) map.set(dir, { dir, items: [] })
-    map.get(dir)!.items.push({ file: h.file, name, line: h.line, text: h.text })
+
+interface SearchRow {
+  kind: 'dir' | 'file' | 'hit'
+  key: string
+  label: string
+  path: string
+  depth: number
+  count?: number
+  line?: number
+  text?: string
+}
+
+const collapsedSearchDirs = ref<Set<string>>(new Set())
+const expandedSearchFiles = ref<Set<string>>(new Set())
+
+const searchTree = computed<SearchNode>(() => {
+  const root: SearchNode = { name: '', path: '', isDir: true, children: new Map(), hits: [] }
+  const items: { file: string; hits: { line: number; text: string }[] }[] =
+    mode.value === 'name'
+      ? matches.value.map((file) => ({ file, hits: [] }))
+      : hits.value.map((h) => ({ file: h.file, hits: [{ line: h.line, text: h.text }] }))
+
+  const insert = (file: string, fileHits: { line: number; text: string }[]) => {
+    const parts = file.split('/').filter(Boolean)
+    let node = root
+    for (let i = 0; i < parts.length; i += 1) {
+      const name = parts[i]
+      const isLeaf = i === parts.length - 1
+      const path = parts.slice(0, i + 1).join('/')
+      if (!node.children.has(name)) {
+        node.children.set(name, { name, path, isDir: !isLeaf, children: new Map(), hits: [] })
+      }
+      node = node.children.get(name)!
+      if (isLeaf) node.hits.push(...fileHits)
+    }
   }
-  return [...map.values()].sort((a, b) => a.dir.localeCompare(b.dir))
+
+  for (const item of items) insert(item.file, item.hits)
+  return root
+})
+
+function countHits(node: SearchNode): number {
+  if (!node.isDir) return node.hits.length || 1
+  return [...node.children.values()].reduce((sum, c) => sum + countHits(c), 0)
+}
+
+const searchRows = computed<SearchRow[]>(() => {
+  const out: SearchRow[] = []
+  const walk = (node: SearchNode, depth: number) => {
+    const children = [...node.children.values()].sort((a, b) =>
+      a.isDir === b.isDir ? a.name.localeCompare(b.name, 'zh-CN') : a.isDir ? -1 : 1,
+    )
+    for (const child of children) {
+      if (child.isDir) {
+        out.push({
+          kind: 'dir',
+          key: `d:${child.path}`,
+          label: child.name,
+          path: child.path,
+          depth,
+          count: countHits(child),
+        })
+        if (!collapsedSearchDirs.value.has(child.path)) walk(child, depth + 1)
+      } else {
+        out.push({
+          kind: 'file',
+          key: `f:${child.path}`,
+          label: child.name,
+          path: child.path,
+          depth,
+          count: mode.value === 'content' ? child.hits.length : 0,
+        })
+        if (mode.value === 'content' && child.hits.length && expandedSearchFiles.value.has(child.path)) {
+          for (const h of child.hits) {
+            out.push({
+              kind: 'hit',
+              key: `h:${child.path}:${h.line}`,
+              label: h.text,
+              path: child.path,
+              depth: depth + 1,
+              line: h.line,
+              text: h.text,
+            })
+          }
+        }
+      }
+    }
+  }
+  walk(searchTree.value, 0)
+  return out
+})
+
+function toggleSearchDir(path: string) {
+  const next = new Set(collapsedSearchDirs.value)
+  if (next.has(path)) next.delete(path)
+  else next.add(path)
+  collapsedSearchDirs.value = next
+}
+
+function toggleSearchFile(path: string) {
+  const next = new Set(expandedSearchFiles.value)
+  if (next.has(path)) next.delete(path)
+  else next.add(path)
+  expandedSearchFiles.value = next
+}
+
+watch([q, mode], () => {
+  collapsedSearchDirs.value = new Set()
+  expandedSearchFiles.value = new Set()
 })
 
 interface Row {
@@ -332,41 +434,57 @@ onMounted(() => {
           </span>
         </div>
 
-        <template v-if="mode === 'name'">
-          <button
-            v-for="f in matches"
-            :key="f"
-            class="flex w-full items-center gap-1.5 truncate px-3 py-[3px] text-left text-[12px] row-hover"
-            :style="repo.activeFile() === f ? { color: 'var(--accent)' } : { color: 'var(--text-dim)' }"
-            :title="f"
-            @click="openFile(f)"
-            @contextmenu="onCtx($event, f)"
-          >
-            <Icon name="file" :size="12" class="shrink-0 t3" />
-            <span class="truncate">{{ f }}</span>
-          </button>
-          <div v-if="!matches.length" class="px-3 py-2 text-[11px] t3">没有匹配的文件名</div>
-        </template>
-
-        <template v-else>
-          <div v-for="g in hitGroups" :key="g.dir" class="mb-1">
-            <div class="flex items-center gap-1 px-3 py-[2px] text-[11px] t3">
-              <Icon name="folder" :size="11" class="shrink-0" />
-              <span class="truncate">{{ g.dir || '（根目录）' }}</span>
-              <span class="opacity-60">{{ g.items.length }}</span>
-            </div>
+        <template v-if="searchRows.length">
+          <template v-for="row in searchRows" :key="row.key">
             <button
-              v-for="h in g.items"
-              :key="`${h.file}:${h.line}`"
-              class="flex w-full items-center gap-2 py-[2px] pl-7 pr-3 text-left text-[11px] row-hover"
-              :style="repo.activeFile() === h.file ? { color: 'var(--accent)' } : { color: 'var(--text-dim)' }"
-              :title="`${h.file}:${h.line}`"
-              @click="openFile(h.file)"
-              @contextmenu="onCtx($event, h.file)"
+              v-if="row.kind === 'dir'"
+              class="flex w-full items-center gap-1.5 py-[3px] pr-2 text-left text-[12px] row-hover"
+              :style="{ paddingLeft: `${8 + row.depth * 12}px` }"
+              :title="row.path"
+              @click="toggleSearchDir(row.path)"
+              @contextmenu="onCtx($event, row.path, true)"
             >
-              <span class="shrink-0 font-mono text-[10px] opacity-70">{{ h.name }}:{{ h.line }}</span>
+              <span class="w-3 shrink-0 text-[9px] t3">{{ collapsedSearchDirs.has(row.path) ? '▸' : '▾' }}</span>
+              <Icon name="folder" :size="12" class="shrink-0" :style="{ color: 'var(--accent)' }" />
+              <span class="min-w-0 flex-1 truncate t2">{{ row.label }}</span>
+              <span class="shrink-0 text-[10px] t3">{{ row.count }}</span>
+            </button>
+
+            <button
+              v-else-if="row.kind === 'file'"
+              class="flex w-full items-center gap-1.5 py-[3px] pr-2 text-left text-[12px] row-hover"
+              :style="{ paddingLeft: `${8 + row.depth * 12}px` }"
+              :title="row.path"
+              @click="openFile(row.path)"
+              @contextmenu="onCtx($event, row.path)"
+            >
+              <span
+                v-if="row.count"
+                class="flex w-3 shrink-0 items-center justify-center text-[9px] t3"
+                :title="expandedSearchFiles.has(row.path) ? '收起匹配行' : '展开匹配行'"
+                @click.stop="toggleSearchFile(row.path)"
+              >
+                {{ expandedSearchFiles.has(row.path) ? '▾' : '▸' }}
+              </span>
+              <span v-else class="w-3 shrink-0" />
+              <Icon name="file" :size="12" class="shrink-0 t3" />
+              <span class="min-w-0 flex-1 truncate" :style="{ color: 'var(--text-dim)' }">{{ row.label }}</span>
+              <span v-if="row.count" class="shrink-0 rounded px-1 text-[9px] t3" :style="{ background: 'var(--panel-3)' }">
+                {{ row.count }}
+              </span>
+            </button>
+
+            <button
+              v-else
+              class="flex w-full items-center gap-2 py-[2px] pl-7 pr-2 text-left text-[11px] row-hover"
+              :style="{ paddingLeft: `${8 + row.depth * 12 + 7}px` }"
+              :title="`${row.path}:${row.line}`"
+              @click="openFile(row.path)"
+              @contextmenu="onCtx($event, row.path)"
+            >
+              <span class="shrink-0 font-mono text-[10px] opacity-70">{{ row.path.split('/').pop() }}:{{ row.line }}</span>
               <span class="min-w-0 flex-1 truncate font-mono">
-                <template v-for="(p, i) in highlightParts(h.text, q)" :key="i">
+                <template v-for="(p, i) in highlightParts(row.text || '', q)" :key="i">
                   <mark
                     v-if="p.hit"
                     class="rounded px-0.5"
@@ -376,9 +494,11 @@ onMounted(() => {
                 </template>
               </span>
             </button>
-          </div>
-          <div v-if="!hits.length && !hitsLoading" class="px-3 py-2 text-[11px] t3">没有匹配的文件内容</div>
+          </template>
         </template>
+        <div v-else-if="!hitsLoading" class="px-3 py-2 text-[11px] t3">
+          {{ mode === 'name' ? '没有匹配的文件名' : '没有匹配的文件内容' }}
+        </div>
 
         <div class="line-t mx-3 my-2" />
       </template>

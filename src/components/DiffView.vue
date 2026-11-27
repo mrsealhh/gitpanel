@@ -314,9 +314,11 @@ onBeforeUnmount(() => {
 }
 .cm-mergeViewEditor:first-child .cm-changedLine {
   background: var(--diff-delete) !important;
+  box-shadow: inset 3px 0 0 var(--diff-delete-border);
 }
 .cm-mergeViewEditor:last-child .cm-changedLine {
   background: var(--diff-insert) !important;
+  box-shadow: inset 3px 0 0 var(--diff-insert-border);
 }
 .cm-changedText {
   background: var(--diff-change-strong) !important;

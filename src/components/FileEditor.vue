@@ -5,9 +5,14 @@ import { EditorState, StateEffect, StateField } from '@codemirror/state'
 import { defaultKeymap, indentWithTab } from '@codemirror/commands'
 import { syntaxHighlighting } from '@codemirror/language'
 import type { Extension } from '@codemirror/state'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import { languageFor } from '../lib/lang'
 import { codeHighlight } from '../lib/codeHighlight'
+import { useRepoStore } from '../stores/repo'
 import { useSettingsStore } from '../stores/settings'
+import { isTauri, openExternal } from '../api/desktop'
 import Icon from './Icon.vue'
 import IconButton from './IconButton.vue'
 
@@ -36,11 +41,79 @@ const emit = defineEmits<{
 }>()
 
 const settings = useSettingsStore()
+const repo = useRepoStore()
 const host = ref<HTMLElement | null>(null)
 let view: EditorView | null = null
 let seq = 0
 let removeScroll: (() => void) | null = null
 let streamArmed = true
+
+const isMarkdown = computed(() => /\.(md|markdown|mdx)$/i.test(props.file))
+const previewMode = ref(false)
+
+/** 把 Markdown 里的仓库相对图片路径解析成 Tauri 资源地址 */
+function resolveLocalAsset(src: string): string | null {
+  const root = (repo.path || '').replace(/\\/g, '/').replace(/\/+$/, '')
+  if (!isTauri || !root) return null
+  if (!src || src.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(src)) return null
+  let rel = src.split('#')[0].split('?')[0]
+  try {
+    rel = decodeURI(rel)
+  } catch {
+    /* 保留原样 */
+  }
+  if (!rel) return null
+  if (!rel.startsWith('/')) {
+    const dir = props.file.split('/').slice(0, -1).join('/')
+    rel = dir ? `${dir}/${rel}` : rel
+  }
+  const parts: string[] = []
+  for (const seg of rel.replace(/^\/+/, '').split('/')) {
+    if (!seg || seg === '.') continue
+    if (seg === '..') {
+      parts.pop()
+      continue
+    }
+    parts.push(seg)
+  }
+  if (!parts.length) return null
+  return convertFileSrc(`${root}/${parts.join('/')}`)
+}
+
+const renderedMarkdown = computed(() => {
+  if (!isMarkdown.value || !previewMode.value) return ''
+  const html = marked.parse(props.content || '', { async: false }) as string
+  const clean = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } })
+  if (!isTauri || !repo.path) return clean
+  const box = document.createElement('div')
+  box.innerHTML = clean
+  let changed = false
+  for (const img of Array.from(box.querySelectorAll('img'))) {
+    const asset = resolveLocalAsset(img.getAttribute('src') || '')
+    if (asset) {
+      img.setAttribute('src', asset)
+      changed = true
+    }
+  }
+  return changed ? box.innerHTML : clean
+})
+
+function onPreviewClick(e: MouseEvent) {
+  const a = (e.target as HTMLElement | null)?.closest('a')
+  if (!a) return
+  const href = a.getAttribute('href') || ''
+  if (href.startsWith('#')) return
+  e.preventDefault()
+  if (/^https?:\/\//i.test(href)) void openExternal(href)
+}
+
+watch(
+  () => props.file,
+  () => {
+    previewMode.value = isMarkdown.value
+  },
+  { immediate: true },
+)
 
 /* ── 文件内搜索（Ctrl+F） ── */
 const searchOpen = ref(false)
@@ -338,6 +411,15 @@ onBeforeUnmount(() => {
         <span v-if="editable === false" class="mr-1 text-[10px] t3">
           {{ encoding !== 'utf8' && encoding !== 'utf8bom' ? '非 UTF-8，只读' : hasMore ? '分段加载中，读完可编辑' : '过大，只读预览' }}
         </span>
+        <button
+          v-if="isMarkdown"
+          class="btn shrink-0 px-2 py-0 text-[11px]"
+          :style="previewMode ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : {}"
+          :title="previewMode ? '切换到 Markdown 源码' : '预览 Markdown'"
+          @click="previewMode = !previewMode"
+        >
+          {{ previewMode ? '源码' : '预览' }}
+        </button>
         <IconButton name="search" title="在文件内搜索 (Ctrl+F)" @click="openSearch" />
         <IconButton name="refresh" title="重新加载" :disabled="loading" @click="emit('reload')" />
         <IconButton
@@ -371,12 +453,123 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="loading" class="p-6 text-sm t3">加载文件…</div>
-    <div v-show="!loading" ref="host" class="min-h-0 flex-1 overflow-hidden" />
+    <div
+      v-else-if="isMarkdown && previewMode"
+      class="md-preview min-h-0 flex-1 overflow-y-auto px-7 py-5"
+      @click="onPreviewClick"
+      v-html="renderedMarkdown"
+    />
+    <div
+      v-show="!loading && !(isMarkdown && previewMode)"
+      ref="host"
+      class="min-h-0 flex-1 overflow-hidden"
+    />
   </div>
 </template>
 
 <style>
 .cm-editor {
   height: 100%;
+}
+
+.md-preview {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.75;
+  max-width: 980px;
+  margin: 0 auto;
+}
+.md-preview h1,
+.md-preview h2,
+.md-preview h3,
+.md-preview h4 {
+  color: var(--text);
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 1.4em 0 0.6em;
+}
+.md-preview h1 {
+  font-size: 1.75em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.35em;
+}
+.md-preview h2 {
+  font-size: 1.4em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25em;
+}
+.md-preview h3 {
+  font-size: 1.18em;
+}
+.md-preview p {
+  margin: 0.75em 0;
+}
+.md-preview a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-preview ul,
+.md-preview ol {
+  padding-left: 1.6em;
+  margin: 0.7em 0;
+}
+.md-preview li {
+  margin: 0.25em 0;
+}
+.md-preview blockquote {
+  margin: 0.9em 0;
+  padding: 0.2em 0 0.2em 1em;
+  border-left: 3px solid var(--accent);
+  color: var(--text-dim);
+  background: var(--panel-2);
+}
+.md-preview code {
+  font-family: 'JetBrains Mono', Consolas, 'Cascadia Code', monospace;
+  font-size: 0.9em;
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.md-preview pre {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow: auto;
+  margin: 0.9em 0;
+}
+.md-preview pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.md-preview table {
+  border-collapse: collapse;
+  margin: 0.9em 0;
+  width: 100%;
+  font-size: 0.92em;
+}
+.md-preview th,
+.md-preview td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.7em;
+  text-align: left;
+}
+.md-preview th {
+  background: var(--panel-3);
+  font-weight: 600;
+}
+.md-preview img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+.md-preview hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.5em 0;
 }
 </style>
