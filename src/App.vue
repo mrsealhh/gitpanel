@@ -1,33 +1,18 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import CommandOutput from './components/CommandOutput.vue'
-import CommandPalette from './components/CommandPalette.vue'
 import CommitList from './components/CommitList.vue'
-import ConflictResolver from './components/ConflictResolver.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DetailPanel from './components/DetailPanel.vue'
-import DiffView from './components/DiffView.vue'
 import BlameModal from './components/BlameModal.vue'
-import CloneDialog from './components/CloneDialog.vue'
-import DashboardModal from './components/DashboardModal.vue'
 import FileHistoryModal from './components/FileHistoryModal.vue'
-import FileEditor from './components/FileEditor.vue'
 import FilePanel from './components/FilePanel.vue'
 import HealthModal from './components/HealthModal.vue'
-import HistorySearchModal from './components/HistorySearchModal.vue'
 import ProjectSwitcher from './components/ProjectSwitcher.vue'
 import CompareList from './components/CompareList.vue'
-import HunkDialog from './components/HunkDialog.vue'
-import LogModal from './components/LogModal.vue'
-import WorktreeDialog from './components/WorktreeDialog.vue'
 import Icon from './components/Icon.vue'
 import IconButton from './components/IconButton.vue'
-import InputDialog from './components/InputDialog.vue'
 import PatchModal from './components/PatchModal.vue'
-import RebaseDialog from './components/RebaseDialog.vue'
-import RemoteDialog from './components/RemoteDialog.vue'
-import RepoManagerDialog from './components/RepoManagerDialog.vue'
-import SettingsDialog from './components/SettingsDialog.vue'
 import SidePanel from './components/SidePanel.vue'
 import SnapshotPanel from './components/SnapshotPanel.vue'
 import StashPanel from './components/StashPanel.vue'
@@ -52,9 +37,30 @@ import {
 import type { ResizeDir } from './api/desktop'
 import { APP_VERSION, REPO_URL } from './api/update'
 import { copyText } from './lib/clipboard'
+import { formatDate, relativeTime } from './utils/time'
 import { useRepoStore } from './stores/repo'
 import { useSettingsStore } from './stores/settings'
 import { useUpdateStore } from './stores/update'
+
+/**
+ * 按需加载重组件：CodeMirror（编辑器 / Diff）、看板与各类弹窗都只在第一次使用时才下载并执行，
+ * 减小启动时需要解析的主包体积。
+ */
+const FileEditor = defineAsyncComponent(() => import('./components/FileEditor.vue'))
+const DiffView = defineAsyncComponent(() => import('./components/DiffView.vue'))
+const ConflictResolver = defineAsyncComponent(() => import('./components/ConflictResolver.vue'))
+const RebaseDialog = defineAsyncComponent(() => import('./components/RebaseDialog.vue'))
+const HistorySearchModal = defineAsyncComponent(() => import('./components/HistorySearchModal.vue'))
+const DashboardModal = defineAsyncComponent(() => import('./components/DashboardModal.vue'))
+const CloneDialog = defineAsyncComponent(() => import('./components/CloneDialog.vue'))
+const HunkDialog = defineAsyncComponent(() => import('./components/HunkDialog.vue'))
+const LogModal = defineAsyncComponent(() => import('./components/LogModal.vue'))
+const WorktreeDialog = defineAsyncComponent(() => import('./components/WorktreeDialog.vue'))
+const RemoteDialog = defineAsyncComponent(() => import('./components/RemoteDialog.vue'))
+const RepoManagerDialog = defineAsyncComponent(() => import('./components/RepoManagerDialog.vue'))
+const CommandPalette = defineAsyncComponent(() => import('./components/CommandPalette.vue'))
+const SettingsDialog = defineAsyncComponent(() => import('./components/SettingsDialog.vue'))
+const InputDialog = defineAsyncComponent(() => import('./components/InputDialog.vue'))
 
 const repo = useRepoStore()
 const settings = useSettingsStore()
@@ -343,6 +349,37 @@ async function open() {
 function openPath(p: string) {
   pathInput.value = p
   open()
+}
+
+/** 欢迎页「最近打开」：按最后打开时间倒序，分 置顶 / 近一周 / 近一个月 / 更多 */
+type RecentItem = (typeof repo.recents)[number]
+const recentGroups = computed<{ key: string; label: string; items: RecentItem[] }[]>(() => {
+  const DAY = 86_400_000
+  const now = Date.now()
+  const sorted = [...repo.recents].sort((a, b) => b.openedAt - a.openedAt)
+  const week: RecentItem[] = []
+  const month: RecentItem[] = []
+  const older: RecentItem[] = []
+  for (const r of sorted) {
+    if (r.pinned) continue
+    const age = now - r.openedAt
+    if (age <= 7 * DAY) week.push(r)
+    else if (age <= 30 * DAY) month.push(r)
+    else older.push(r)
+  }
+  return [
+    { key: 'pinned', label: '置顶', items: sorted.filter((r) => r.pinned) },
+    { key: 'week', label: '近一周', items: week },
+    { key: 'month', label: '近一个月', items: month },
+    { key: 'older', label: '更多', items: older },
+  ].filter((g) => g.items.length > 0)
+})
+
+/** 最近打开时间：跟随「相对时间」设置 */
+function recentWhen(ms: number) {
+  if (!ms) return ''
+  const sec = Math.floor(ms / 1000)
+  return settings.relativeTime ? relativeTime(sec) : formatDate(sec)
 }
 
 const changeCount = computed(() => {
@@ -853,6 +890,17 @@ onMounted(async () => {
   void repo.loadRecents()
   repo.loadLogs()
   maximized.value = await isMaximized()
+
+  // 空闲时预取首屏用不到的重组件，既不拖慢启动，也让第一次打开文件 / Diff 无等待
+  const warm = () => {
+    void import('./components/FileEditor.vue')
+    void import('./components/DiffView.vue')
+  }
+  const idle = (window as Window & {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+  }).requestIdleCallback
+  if (idle) idle(warm, { timeout: 4000 })
+  else window.setTimeout(warm, 2500)
 
   if (settings.autoCheckUpdate) {
     void update.check().then(() => {
@@ -1383,31 +1431,47 @@ onBeforeUnmount(() => {
         <div class="mb-1 text-center text-[15px] font-semibold t1">打开一个 Git 仓库</div>
         <div class="mb-5 text-center text-[12px] t3">本地运行，不联网，不上传任何数据</div>
 
-        <div v-if="repo.recents.length" class="mb-4">
-          <div class="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide t3">最近打开</div>
-          <div
-            v-for="r in repo.recents"
-            :key="r.path"
-            class="row-hover group flex cursor-pointer items-center gap-2 rounded px-2 py-1.5"
-            @click="openPath(r.path)"
-          >
-            <Icon name="folder" :size="14" class="shrink-0 t3" />
-            <span class="shrink-0 text-[12px] t1">{{ r.name }}</span>
-            <span class="min-w-0 flex-1 truncate font-mono text-[11px] t3">{{ r.path }}</span>
-            <IconButton
-              name="pin"
-              :title="r.pinned ? '取消置顶' : '置顶'"
-              :active="r.pinned"
-              :size="13"
-              @click.stop="repo.pinRecent(r.path, !r.pinned)"
-            />
-            <IconButton
-              name="trash"
-              title="从列表移除"
-              :size="13"
-              danger
-              @click.stop="repo.forget(r.path)"
-            />
+        <div v-if="recentGroups.length" class="mb-4">
+          <div class="mb-1.5 flex items-center justify-between px-1">
+            <div class="text-[11px] font-medium uppercase tracking-wide t3">最近打开</div>
+            <div v-if="repo.recents.length > 1" class="text-[10px] t3">{{ repo.recents.length }} 个仓库</div>
+          </div>
+          <div class="-mr-1 max-h-[52vh] overflow-y-auto pr-1">
+            <template v-for="g in recentGroups" :key="g.key">
+              <div
+                class="sticky top-0 z-10 flex items-center gap-2 px-1 pb-1 pt-1.5 text-[10px] t3"
+                :style="{ background: 'var(--bg)' }"
+              >
+                <span class="shrink-0">{{ g.label }}</span>
+                <span class="shrink-0 opacity-60">{{ g.items.length }}</span>
+                <span class="h-px flex-1" :style="{ background: 'var(--border)' }" />
+              </div>
+              <div
+                v-for="r in g.items"
+                :key="r.path"
+                class="row-hover group flex cursor-pointer items-center gap-2 rounded px-2 py-1.5"
+                @click="openPath(r.path)"
+              >
+                <Icon name="folder" :size="14" class="shrink-0 t3" />
+                <span class="shrink-0 text-[12px] t1">{{ r.alias || r.name }}</span>
+                <span class="min-w-0 flex-1 truncate font-mono text-[11px] t3">{{ r.path }}</span>
+                <span class="shrink-0 text-[10px] t3">{{ recentWhen(r.openedAt) }}</span>
+                <IconButton
+                  name="pin"
+                  :title="r.pinned ? '取消置顶' : '置顶'"
+                  :active="r.pinned"
+                  :size="13"
+                  @click.stop="repo.pinRecent(r.path, !r.pinned)"
+                />
+                <IconButton
+                  name="trash"
+                  title="从列表移除"
+                  :size="13"
+                  danger
+                  @click.stop="repo.forget(r.path)"
+                />
+              </div>
+            </template>
           </div>
         </div>
 

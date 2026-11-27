@@ -1472,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "git-core"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "git2",
@@ -1497,7 +1497,7 @@ dependencies = [
 
 [[package]]
 name = "gitpanel"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1515,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "gitpanel-mcp"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "git-core",
@@ -2965,7 +2965,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "perf-probe"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "git-core",

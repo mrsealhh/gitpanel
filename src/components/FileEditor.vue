@@ -123,6 +123,79 @@ const matchCount = ref(0)
 const matchIndex = ref(0)
 let matchPositions: number[] = []
 
+/** Markdown 预览内搜索：在渲染后的 DOM 文本节点上包 <mark>，避免破坏链接与结构 */
+const previewEl = ref<HTMLElement | null>(null)
+let previewMarks: HTMLElement[] = []
+
+function clearPreviewMarks() {
+  if (!previewMarks.length) return
+  const parents = new Set<Node>()
+  for (const mark of previewMarks) {
+    const parent = mark.parentNode
+    if (!parent) continue
+    parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
+    parents.add(parent)
+  }
+  for (const p of parents) (p as Node).normalize()
+  previewMarks = []
+}
+
+function jumpPreview(idx: number) {
+  if (!previewMarks.length) return
+  const i = ((idx % previewMarks.length) + previewMarks.length) % previewMarks.length
+  previewMarks.forEach((m) => m.classList.remove('md-hit-current'))
+  const mark = previewMarks[i]
+  mark.classList.add('md-hit-current')
+  mark.scrollIntoView({ block: 'center', inline: 'nearest' })
+  matchIndex.value = i
+}
+
+function computePreviewMatches(jump = true) {
+  clearPreviewMarks()
+  matchCount.value = 0
+  const box = previewEl.value
+  const needle = query.value.trim().toLowerCase()
+  if (!box || !needle) return
+
+  const nodes: Text[] = []
+  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT)
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text
+    const parent = node.parentElement
+    if (!parent || !node.nodeValue) continue
+    if (parent.closest('script,style')) continue
+    if (!node.nodeValue.toLowerCase().includes(needle)) continue
+    nodes.push(node)
+  }
+
+  const marks: HTMLElement[] = []
+  for (const node of nodes) {
+    const value = node.nodeValue || ''
+    const hay = value.toLowerCase()
+    let at = hay.indexOf(needle)
+    if (at < 0) continue
+    const frag = document.createDocumentFragment()
+    let last = 0
+    while (at >= 0 && marks.length < 3000) {
+      if (at > last) frag.appendChild(document.createTextNode(value.slice(last, at)))
+      const mark = document.createElement('mark')
+      mark.className = 'md-hit'
+      mark.textContent = value.slice(at, at + needle.length)
+      frag.appendChild(mark)
+      marks.push(mark)
+      last = at + needle.length
+      at = hay.indexOf(needle, last)
+    }
+    if (last < value.length) frag.appendChild(document.createTextNode(value.slice(last)))
+    node.parentNode?.replaceChild(frag, node)
+  }
+
+  previewMarks = marks
+  matchCount.value = marks.length
+  if (matchIndex.value >= marks.length) matchIndex.value = 0
+  if (jump && marks.length) jumpPreview(matchIndex.value)
+}
+
 /** 所有搜索匹配的高亮装饰（当前匹配仍用原生选区强调） */
 const setSearchMatches = StateEffect.define<{ from: number; to: number }[]>()
 const searchMatchField = StateField.define<DecorationSet>({
@@ -146,9 +219,14 @@ function clearSearchMatches() {
   matchPositions = []
   matchCount.value = 0
   view?.dispatch({ effects: setSearchMatches.of([]) })
+  clearPreviewMarks()
 }
 
 function computeMatches(jump = true) {
+  if (isMarkdown.value && previewMode.value) {
+    computePreviewMatches(jump)
+    return
+  }
   const v = view
   const q = query.value
   if (!v || !q) {
@@ -185,6 +263,12 @@ function jumpTo(idx: number) {
 }
 
 function step(delta: number) {
+  if (isMarkdown.value && previewMode.value) {
+    if (!previewMarks.length) computePreviewMatches(false)
+    if (!previewMarks.length) return
+    jumpPreview(matchIndex.value + delta)
+    return
+  }
   if (!matchPositions.length) computeMatches()
   if (!matchPositions.length) return
   jumpTo(matchIndex.value + delta)
@@ -201,8 +285,29 @@ function openSearch() {
 function closeSearch() {
   searchOpen.value = false
   clearSearchMatches()
-  view?.focus()
+  if (!(isMarkdown.value && previewMode.value)) view?.focus()
 }
+
+/** 预览态下 Ctrl+F 也能打开文件内搜索（捕获阶段先于全局快捷键） */
+function onPreviewKey(e: KeyboardEvent) {
+  if (!isMarkdown.value || !previewMode.value) return
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    e.stopPropagation()
+    openSearch()
+  }
+}
+
+watch([previewMode, () => props.file], () => {
+  clearPreviewMarks()
+  if (searchOpen.value) nextTick(() => computeMatches())
+})
+
+watch(renderedMarkdown, () => {
+  if (searchOpen.value && isMarkdown.value && previewMode.value) {
+    nextTick(() => computePreviewMatches(true))
+  }
+})
 
 function cssVar(name: string, fallback: string) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -383,8 +488,13 @@ watch(
   },
 )
 
-onMounted(build)
+onMounted(() => {
+  window.addEventListener('keydown', onPreviewKey, true)
+  build()
+})
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onPreviewKey, true)
+  clearPreviewMarks()
   seq++
   destroy()
 })
@@ -455,6 +565,7 @@ onBeforeUnmount(() => {
     <div v-if="loading" class="p-6 text-sm t3">加载文件…</div>
     <div
       v-else-if="isMarkdown && previewMode"
+      ref="previewEl"
       class="md-preview min-h-0 flex-1 overflow-y-auto px-7 py-5"
       @click="onPreviewClick"
       v-html="renderedMarkdown"
@@ -566,6 +677,17 @@ onBeforeUnmount(() => {
 .md-preview img {
   max-width: 100%;
   border-radius: 8px;
+}
+.md-preview mark.md-hit {
+  background: rgba(250, 204, 21, 0.34);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.md-preview mark.md-hit-current {
+  background: #f59e0b;
+  color: #111827;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
 }
 .md-preview hr {
   border: none;

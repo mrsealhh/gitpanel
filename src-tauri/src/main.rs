@@ -374,6 +374,7 @@ fn fs_grep_batch(
     let mut hits = Vec::new();
     let mut checked = 0usize;
     let mut limit_reached = false;
+    let needle = q.as_bytes();
 
     for file in files {
         if hits.len() >= limit {
@@ -388,6 +389,10 @@ fn fs_grep_batch(
         let Ok(bytes) = std::fs::read(&target) else { continue };
         checked += 1;
         if bytes.iter().take(8000).any(|b| *b == 0) {
+            continue;
+        }
+        // 先做字节级预筛：未命中就不必把整个文件解码成字符串（大仓库搜索的主要开销）
+        if !bytes.windows(needle.len()).any(|w| w == needle) {
             continue;
         }
         let text = String::from_utf8_lossy(&bytes);
