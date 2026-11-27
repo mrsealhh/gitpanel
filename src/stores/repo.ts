@@ -1130,6 +1130,37 @@ export const useRepoStore = defineStore('repo', {
       }
     },
 
+    /** 只刷新本地分支 / 提交图（不访问远端） */
+    async refreshBranches() {
+      if (!this.path) return
+      try {
+        this.info = await api.openRepo(this.path)
+        await Promise.all([this.loadBranchStatus(), this.refreshStatus(), this.reload()])
+        this.notify('ok', '本地分支已刷新')
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      }
+    },
+
+    /** 推送指定分支到同名远端分支（自动建立跟踪，不需要先切过去） */
+    async pushBranch(name: string, force = false) {
+      if (!this.path) return
+      this.syncing = 'push'
+      this.syncOutput = ''
+      try {
+        const r = await api.pushBranch(this.path, name, force)
+        this.syncOutput = r.output || '(无输出)'
+        this.notify('ok', `已推送 ${name}`)
+        this.info = await api.openRepo(this.path)
+        await Promise.all([this.loadBranchStatus(), this.refreshStatus()])
+        await this.reload()
+      } catch (e) {
+        this.notify('err', String((e as Error).message || e))
+      } finally {
+        this.syncing = ''
+      }
+    },
+
     async sync(kind: 'fetch' | 'pull' | 'push', force = false) {
       if (!this.path) return
       this.syncing = kind

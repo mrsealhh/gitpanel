@@ -605,9 +605,10 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
       ]
     : isRemote
       ? [
+          { id: 'checkout', label: '签出为本地分支（自动跟踪）' },
+          { id: 'merge', label: '合并到当前分支' },
           { id: 'new-branch', label: '从此远端分支新建本地分支…' },
           { id: 'worktree-new', label: '从此分支新建工作树…' },
-          { id: 'checkout', label: '签出为本地分支（自动跟踪）' },
           { id: 'compare', label: '与当前 HEAD 对比' },
           { id: 'divider', label: '', divider: true },
           { id: 'fetch', label: '抓取所有远端（fetch）' },
@@ -616,16 +617,17 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
           { id: 'copy-name', label: '复制名称' },
         ]
       : [
+          { id: 'checkout', label: '检出此分支' },
+          { id: 'merge', label: '合并到当前分支' },
           { id: 'new-branch', label: '从此分支新建分支…' },
           { id: 'worktree-new', label: '从此分支新建工作树…' },
           ...(ref.name !== repo.info?.branch ? [{ id: 'worktree-checkout', label: '检出此分支到新工作树…' }] : []),
-          { id: 'checkout', label: '检出此分支' },
-          { id: 'merge', label: '合并到当前分支' },
           { id: 'rebase-onto', label: '交互式 rebase 到此分支' },
           { id: 'divider', label: '', divider: true },
           { id: 'fetch', label: '抓取所有远端（fetch）' },
           { id: 'pull', label: '拉取当前分支（pull）' },
           { id: 'push', label: '推送当前分支（push）' },
+          { id: 'push-branch', label: '推送此分支到远端（自动建立跟踪）' },
           { id: 'divider3', label: '', divider: true },
           { id: 'rename', label: '重命名…' },
           { id: 'delete', label: '删除分支', danger: true },
@@ -655,7 +657,8 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
       } else if (id === 'worktree-checkout') {
         worktreePreset.value = { base: ref.name, branch: ref.name, newBranch: false }
         showWorktreeDialog.value = true
-      } else if (id === 'compare') await repo.openCompare(ref.name, 'HEAD')
+      } else if (id === 'push-branch') await repo.pushBranch(ref.name)
+      else if (id === 'compare') await repo.openCompare(ref.name, 'HEAD')
       else if (id === 'delete-remote') {
         if (settings.confirmDangerous && !window.confirm(`确定删除远端分支 ${ref.name}？\n会执行 git push --delete。`)) return
         await repo.deleteRemoteBranch(ref.name)
@@ -1208,6 +1211,8 @@ onBeforeUnmount(() => {
           @checkout="onCheckoutRef"
           @delete-remote="onDeleteRemoteBranch"
           @manage-remotes="showRemotes = true"
+          @refresh-branches="repo.refreshBranches()"
+          @push-branch="repo.pushBranch($event)"
         />
         <StashPanel v-else-if="leftTab === 'stashes'" class="min-h-0 flex-1" @create="openCreateStash" />
         <WorktreePanel

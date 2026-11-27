@@ -18,6 +18,8 @@ const emit = defineEmits<{
   (e: 'context', payload: { ref: RepoRef; x: number; y: number }): void
   (e: 'create-tag'): void
   (e: 'sync', kind: 'fetch' | 'pull' | 'push'): void
+  (e: 'refresh-branches'): void
+  (e: 'push-branch', name: string): void
   (e: 'compare', name: string): void
   (e: 'checkout', name: string): void
   (e: 'delete-remote', name: string): void
@@ -212,18 +214,21 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
       </button>
 
       <!-- 本地分支树 -->
-      <button
-        class="flex w-full items-center gap-1 px-3 py-1 text-[11px] font-medium uppercase tracking-wide t3"
-        @click="open.local = !open.local"
-      >
-        <span class="text-[9px]">{{ open.local ? '▾' : '▸' }}</span>
-        本地分支
-        <span class="ml-1 opacity-60">{{ localCount }}</span>
-      </button>
+      <div class="flex items-center pr-2">
+        <button
+          class="flex flex-1 items-center gap-1 px-3 py-1 text-[11px] font-medium uppercase tracking-wide t3"
+          @click="open.local = !open.local"
+        >
+          <span class="text-[9px]">{{ open.local ? '▾' : '▸' }}</span>
+          本地分支
+          <span class="ml-1 opacity-60">{{ localCount }}</span>
+        </button>
+        <IconButton compact name="refresh" title="刷新本地分支（不访问远端）" :size="12" @click="emit('refresh-branches')" />
+      </div>
       <div v-show="open.local">
         <div v-for="row in localRows" :key="`l:${row.node.path}`">
         <div
-          class="flex w-full cursor-pointer items-center gap-1 py-[3px] text-[12px] row-hover"
+          class="group flex w-full cursor-pointer items-center gap-1 py-[3px] text-[12px] row-hover"
           :style="rowStyle(row.depth, tip === row.node.ref?.name, !!row.node.ref)"
           :title="row.node.path"
           @click="onNode(row, 'local')"
@@ -263,14 +268,19 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
             ↓{{ statusMap[row.node.ref?.name ?? ''].behind }}
           </span>
 
-          <span
-            v-if="row.node.ref?.name === branch"
-            class="ml-auto shrink-0 rounded px-1 text-[9px]"
-            :style="{ background: 'var(--accent-weak)', color: 'var(--accent)' }"
-          >
+          <span v-if="row.node.ref?.name === branch" class="ml-auto shrink-0 rounded px-1 text-[9px]"
+            :style="{ background: 'var(--accent-weak)', color: 'var(--accent)' }">
             当前
           </span>
-          <span v-else-if="statusMap[row.node.ref?.name ?? '']" class="ml-auto flex shrink-0 items-center gap-1">
+          <span v-else-if="row.node.ref" class="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100">
+            <IconButton
+              compact
+              name="push"
+              :title="`推送 ${row.node.ref!.name} 到远端（自动建立跟踪）`"
+              :size="12"
+              :active="!!statusMap[row.node.ref!.name]?.ahead"
+              @click.stop="emit('push-branch', row.node.ref!.name)"
+            />
             <IconButton
               compact
               name="compare"
@@ -295,6 +305,7 @@ function rowStyle(depth: number, selected: boolean, isRef: boolean) {
             远端分支
             <span class="ml-1 opacity-60">{{ remoteCount }}</span>
           </button>
+          <IconButton compact name="refresh" title="刷新远端分支（fetch --prune）" :size="12" @click="emit('sync', 'fetch')" />
           <IconButton compact name="settings" title="管理远端仓库（新增 / 改地址 / 删除）" :size="12" @click="emit('manage-remotes')" />
         </div>
         <div v-show="open.remote">

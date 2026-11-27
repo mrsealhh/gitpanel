@@ -1003,6 +1003,44 @@ impl Repo {
         Ok(git(self.path(), &refs)?.trim().to_string())
     }
 
+    /// 推送指定本地分支到同名远端分支，并建立跟踪（不要求先切到该分支）
+    pub fn push_branch(&self, branch: &str, force: bool) -> Result<String> {
+        if !crate::actions::valid_ref(branch) {
+            bail!("非法的分支名");
+        }
+        if git_allow_fail(
+            self.path(),
+            &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+        )
+        .is_none()
+        {
+            bail!("本地分支不存在：{branch}");
+        }
+        let remotes = git_allow_fail(self.path(), &["remote"]).unwrap_or_default();
+        let remote = remotes
+            .lines()
+            .map(|l| l.trim())
+            .find(|l| *l == "origin")
+            .or_else(|| remotes.lines().map(|l| l.trim()).find(|l| !l.is_empty()));
+        let Some(remote) = remote else {
+            bail!("这个仓库没有配置远端，先添加一个 remote 再推送");
+        };
+
+        let mut args: Vec<&str> = vec!["push"];
+        if force {
+            args.push("--force-with-lease");
+        }
+        args.push("--set-upstream");
+        args.push(remote);
+        args.push(branch);
+        let out = git(self.path(), &args)?.trim().to_string();
+        if out.is_empty() {
+            Ok(format!("{branch} 已推送到 {remote}/{branch}"))
+        } else {
+            Ok(out)
+        }
+    }
+
     /// 把文件加入 .gitignore（忽略单个文件）
     pub fn ignore_file(&self, file: &str) -> Result<String> {
         let rel = file.replace('\\', "/");
@@ -1716,8 +1754,33 @@ impl Repo {
             args.push(&abs_s);
             args.push(if base.trim().is_empty() { "HEAD" } else { base.trim() });
         } else {
-            args.push(&abs_s);
-            args.push(branch);
+            // 远端分支（origin/foo）→ 在工作树里建同名本地分支并跟踪；本地分支直接检出
+            let is_remote = git_allow_fail(
+                self.path(),
+                &["rev-parse", "--verify", &format!("refs/remotes/{branch}")],
+            )
+            .is_some();
+            if is_remote {
+                let local = branch.split_once('/').map(|(_, b)| b).unwrap_or(branch);
+                if local.is_empty() {
+                    bail!("非法的工作树分支：{branch}");
+                }
+                if git_allow_fail(
+                    self.path(),
+                    &["rev-parse", "--verify", &format!("refs/heads/{local}")],
+                )
+                .is_some()
+                {
+                    bail!("本地分支 {local} 已存在，改用「新建分支」或先删除它");
+                }
+                args.push("-b");
+                args.push(local);
+                args.push(&abs_s);
+                args.push(branch);
+            } else {
+                args.push(&abs_s);
+                args.push(branch);
+            }
         }
 
         git(self.path(), &args)?;

@@ -174,6 +174,9 @@ export const api = {
   push(path: string, force = false): Promise<SyncResult> {
     return post<SyncResult>('/api/push', { path, force })
   },
+  pushBranch(path: string, branch: string, force = false): Promise<SyncResult> {
+    return post<SyncResult>('/api/push-branch', { path, branch, force })
+  },
 
   /* ── 安全网 ── */
   snapshots(path: string): Promise<{ snapshots: Snapshot[] }> {

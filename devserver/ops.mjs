@@ -435,6 +435,33 @@ export async function pushRepo(repo, force) {
   return { ok: true, output: out.trim() }
 }
 
+/** 推送指定本地分支到同名远端分支，并自动建立跟踪（无需先切过去） */
+export async function pushBranch(repo, branch, force = false) {
+  assertRef(branch, '分支名')
+  const git = makeGit(repo)
+  try {
+    await git(['rev-parse', '--verify', `refs/heads/${branch}`])
+  } catch {
+    throw new Error(`本地分支不存在：${branch}`)
+  }
+  let remotes = []
+  try {
+    remotes = (await git(['remote']))
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+  } catch {
+    remotes = []
+  }
+  const remote = remotes.includes('origin') ? 'origin' : remotes[0]
+  if (!remote) throw new Error('这个仓库没有配置远端，先添加一个 remote 再推送')
+  const args = ['push']
+  if (force) args.push('--force-with-lease')
+  args.push('--set-upstream', remote, branch)
+  const out = await git(args, { timeout: SYNC_TIMEOUT })
+  return { ok: true, output: out.trim() || `${branch} 已推送到 ${remote}/${branch}` }
+}
+
 /* ────────────────────────── 暂存（stash） ────────────────────────── */
 
 const SAFE_NAME = /^[A-Za-z0-9._\-\/]+$/
@@ -748,7 +775,26 @@ export async function addWorktree(repo, opts) {
     args.push(opts.base && String(opts.base).trim() ? String(opts.base).trim() : 'HEAD')
   } else {
     if (!opts.branch) throw new Error('缺少分支名')
-    args.push(target, opts.branch)
+    let isRemote = false
+    try {
+      await git(['rev-parse', '--verify', `refs/remotes/${opts.branch}`])
+      isRemote = true
+    } catch {
+      isRemote = false
+    }
+    if (isRemote) {
+      const local = opts.branch.split('/').slice(1).join('/')
+      if (!local) throw new Error(`非法的工作树分支：${opts.branch}`)
+      try {
+        await git(['rev-parse', '--verify', `refs/heads/${local}`])
+        throw new Error(`本地分支 ${local} 已存在，改用「新建分支」或先删除它`)
+      } catch (e) {
+        if (String(e.message || e).includes('已存在')) throw e
+      }
+      args.push('-b', local, target, opts.branch)
+    } else {
+      args.push(target, opts.branch)
+    }
   }
 
   await git(args)

@@ -479,6 +479,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/fetch') return send(res, 200, await ops.fetchRepo(body.path))
     if (url.pathname === '/api/pull') return send(res, 200, await ops.pullRepo(body.path, body.strategy))
     if (url.pathname === '/api/push') return send(res, 200, await ops.pushRepo(body.path, !!body.force))
+    if (url.pathname === '/api/push-branch') {
+      return send(res, 200, await ops.pushBranch(body.path, body.branch, !!body.force))
+    }
     if (url.pathname === '/api/snapshots') return send(res, 200, await ops.listSnapshots(body.path))
     if (url.pathname === '/api/delete-snapshot') {
       return send(res, 200, await ops.deleteSnapshot(body.path, body.ref))

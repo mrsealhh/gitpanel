@@ -138,6 +138,10 @@ fn dispatch(cmd: &str, p: Value) -> Result<Value> {
             json!({ "ok": true, "output": output, "snapshot": snapshot })
         }
         "push" => json!({ "ok": true, "output": repo.push(b(&p, "force"))? }),
+        "push-branch" => json!({
+            "ok": true,
+            "output": repo.push_branch(&s(&p, "branch"), b(&p, "force"))?
+        }),
 
         "snapshots" => json!({ "snapshots": repo.list_snapshots()? }),
         "restore-snapshot" => {
