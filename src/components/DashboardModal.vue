@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onBeforeUnmount, onMounted } from 'vue'
 import { useRepoStore } from '../stores/repo'
 import { relativeTime } from '../utils/time'
 import IconButton from './IconButton.vue'
@@ -8,6 +8,8 @@ const emit = defineEmits<{ (e: 'close'): void; (e: 'open', path: string): void; 
 const repo = useRepoStore()
 
 onMounted(() => repo.loadOverview())
+// 面板关闭（或立刻关闭）时停止后续仓库统计，避免关闭后还在后台连续查询
+onBeforeUnmount(() => repo.cancelOverview())
 
 function groupOf(path: string) {
   return repo.recents.find((r) => r.path === path)?.groupPath || ''

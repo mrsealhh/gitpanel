@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRepoStore } from '../stores/repo'
+import { useSettingsStore } from '../stores/settings'
 import IconButton from './IconButton.vue'
 import Icon from './Icon.vue'
-import { relativeTime } from '../utils/time'
+import { formatDate, relativeTime } from '../utils/time'
 
 const emit = defineEmits<{
   (e: 'create'): void
@@ -12,16 +13,34 @@ const emit = defineEmits<{
   (e: 'set-task', path: string): void
 }>()
 const repo = useRepoStore()
+const settings = useSettingsStore()
 
 onMounted(() => repo.loadWorktrees())
+// 切换仓库 / 工作树后重新拉取，保证「当前」标记与路径一致
+watch(() => repo.path, () => repo.loadWorktrees())
+
+const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+/** 以实际打开的仓库路径为准，避免列表还没刷新时把当前工作树判断错 */
+function isCurrent(wt: { path: string; isCurrent: boolean }) {
+  if (repo.path) return norm(repo.path) === norm(wt.path)
+  return wt.isCurrent
+}
 
 function metaOf(p: string) {
   return repo.worktreeMeta[p]
 }
 
+/** 最后活动时间统一成秒：meta 存的是毫秒，git 给的是秒 */
 function lastActive(wt: { path: string; lastCommit: number }) {
   const m = metaOf(wt.path)
-  return (m?.lastUsedAt || wt.lastCommit || 0) / 1000
+  if (m?.lastUsedAt) return Math.floor(m.lastUsedAt / 1000)
+  return wt.lastCommit || 0
+}
+
+function lastActiveLabel(wt: { path: string; lastCommit: number }) {
+  const t = lastActive(wt)
+  if (!t) return '—'
+  return settings.relativeTime ? relativeTime(t) : formatDate(t)
 }
 
 const totalDirty = computed(() => repo.worktrees.reduce((n, w) => n + w.dirty, 0))
@@ -31,17 +50,41 @@ async function copyPath(p: string) {
   repo.notify('ok', '已复制路径')
 }
 
-async function remove(wt: { path: string; dirty: number; isCurrent: boolean }) {
-  if (wt.isCurrent) {
+function onCardClick(wt: { path: string; isCurrent: boolean; exists: boolean }) {
+  if (isCurrent(wt)) return
+  if (!wt.exists) {
+    repo.notify('err', '这个工作树的目录已经不在了，可以点右上角「清理」移除登记')
+    return
+  }
+  emit('open', wt.path)
+}
+
+async function remove(wt: { path: string; dirty: number; isCurrent: boolean; exists: boolean }) {
+  if (isCurrent(wt)) {
     repo.notify('err', '不能移除当前正在使用的工作树')
+    return
+  }
+  if (!wt.exists) {
+    if (!window.confirm('这个工作树的目录已经不存在了，确定清理这条登记？')) return
+    await repo.pruneWorktrees()
     return
   }
   const force = wt.dirty > 0
   const msg = force
-    ? `该工作树有 ${wt.dirty} 个未提交改动，\n确定强制移除？改动会丢失（主仓库已有安全网快照不影响它）`
+    ? `该工作树有 ${wt.dirty} 个未提交 / 未跟踪改动，\n确定强制移除？改动会丢失（主仓库已有安全网快照不影响它）`
     : '确定移除该工作树？（只移除目录，分支保留）'
   if (!window.confirm(msg)) return
-  await repo.removeWorktree(wt.path, force)
+  const res = await repo.removeWorktree(wt.path, force)
+  if (res.ok) return
+  const err = res.error || ''
+  // 目录里有未跟踪 / 未提交文件时 git 默认拒绝删除，问一次再强制删
+  if (/modified|untracked|contain/i.test(err)) {
+    if (window.confirm('该工作树里还有未提交或未跟踪的文件，\n强制移除会一起删掉。确定强制移除？')) {
+      await repo.removeWorktree(wt.path, true)
+    }
+  } else if (/locked/i.test(err)) {
+    await repo.removeWorktree(wt.path, true)
+  }
 }
 </script>
 
@@ -59,11 +102,14 @@ async function remove(wt: { path: string; dirty: number; isCurrent: boolean }) {
       <div v-else-if="!repo.worktrees.length" class="p-3 text-[12px] t3">还没有工作树</div>
 
       <div v-for="wt in repo.worktrees" :key="wt.path" class="row-hover group mx-2 my-1 rounded border px-2 py-1.5"
-        :style="{ borderColor: wt.isCurrent ? 'var(--accent)' : 'var(--border)' }">
+        :class="isCurrent(wt) || !wt.exists ? '' : 'cursor-pointer'"
+        :style="{ borderColor: isCurrent(wt) ? 'var(--accent)' : 'var(--border)' }"
+        :title="wt.exists ? (isCurrent(wt) ? '当前工作树' : '点击切换到该工作树') : '目录已不存在，可点「清理」移除登记'"
+        @click="onCardClick(wt)">
         <div class="flex items-center gap-1.5">
           <Icon name="folder" :size="13" class="shrink-0 t3" />
           <span class="min-w-0 flex-1 truncate text-[12px] t1">{{ wt.branch || '（分离头指针）' }}</span>
-          <span v-if="wt.isCurrent" class="badge shrink-0"
+          <span v-if="isCurrent(wt)" class="badge shrink-0"
             :style="{ background: 'var(--accent-weak)', color: 'var(--accent)' }">当前</span>
           <span v-if="wt.locked" class="badge shrink-0"
             :style="{ background: 'var(--badge-tag-bg)', color: 'var(--badge-tag-fg)' }">锁定</span>
@@ -107,16 +153,16 @@ async function remove(wt: { path: string; dirty: number; isCurrent: boolean }) {
           >
             AI 配置
           </span>
-          <span class="ml-auto">{{ wt.lastCommit ? relativeTime(lastActive(wt)) : '—' }}</span>
+          <span class="ml-auto">{{ lastActiveLabel(wt) }}</span>
         </div>
 
-        <div class="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100">
-          <IconButton v-if="!wt.isCurrent" compact name="external" title="打开这个工作树" :size="12" @click="emit('open', wt.path)" />
+        <div class="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100" @click.stop>
+          <IconButton v-if="!isCurrent(wt)" compact name="external" title="打开这个工作树" :size="12" @click="emit('open', wt.path)" />
           <IconButton compact name="copy" title="复制工作树路径" :size="12" @click="copyPath(wt.path)" />
           <IconButton compact name="user" title="标记使用这个工作树的 Agent" :size="12" @click="emit('set-agent', wt.path)" />
           <IconButton compact name="task" title="记录这个工作树在做什么" :size="12" @click="emit('set-task', wt.path)" />
           <IconButton
-            v-if="!wt.isCurrent"
+            v-if="!isCurrent(wt)"
             compact
             name="trash"
             title="移除工作树（目录删除，分支保留）"

@@ -45,6 +45,10 @@ export interface Notice {
 }
 
 let noticeTimer: number | undefined
+/** 多仓库看板的查询批次号：关闭面板后旧批次自动失效 */
+let overviewSeq = 0
+/** 工作树列表的加载批次号：切换仓库时丢弃旧结果 */
+let worktreesSeq = 0
 
 const LOG_KEY = 'gitpanel.logs'
 
@@ -1503,19 +1507,22 @@ export const useRepoStore = defineStore('repo', {
 
     async loadWorktrees() {
       if (!this.path) return
+      const mine = ++worktreesSeq
       this.worktreesLoading = true
       try {
         const [list, meta] = await Promise.all([
           api.worktrees(this.path),
           api.worktreeMetaList(this.path).catch(() => ({ meta: {} })),
         ])
+        if (mine !== worktreesSeq) return
         this.worktrees = list.worktrees
         this.worktreeMeta = meta.meta || {}
       } catch (e) {
+        if (mine !== worktreesSeq) return
         this.worktrees = []
         this.notify('err', String((e as Error).message || e))
       } finally {
-        this.worktreesLoading = false
+        if (mine === worktreesSeq) this.worktreesLoading = false
       }
     },
 
@@ -1541,7 +1548,8 @@ export const useRepoStore = defineStore('repo', {
             .catch(() => null)
         }
         this.notify('ok', `已创建工作树：${res.path}`)
-        await this.loadWorktrees()
+        // 列表刷新放到后台，创建完成后立刻关闭弹窗，不让用户等第二次扫描
+        void this.loadWorktrees()
         return res.path
       } catch (e) {
         this.notify('err', String((e as Error).message || e))
@@ -1582,6 +1590,7 @@ export const useRepoStore = defineStore('repo', {
     },
 
     async loadOverview() {
+      const mine = ++overviewSeq
       this.overviewLoading = true
       this.overview = []
       this.overviewProgress = { done: 0, total: 0 }
@@ -1589,18 +1598,21 @@ export const useRepoStore = defineStore('repo', {
         const recents = await recentList()
         const paths = recents.map((r) => r.path)
         if (!paths.length) {
-          this.overview = []
+          if (mine === overviewSeq) this.overview = []
           return
         }
         this.overviewProgress = { done: 0, total: paths.length }
-        // 逐个仓库统计并立即追加，先出来的先展示；单个仓库超时不影响其它仓库
+        // 逐个仓库统计并立即追加，先出来的先展示；关闭看板后立即停止，不再继续发起查询
         for (let i = 0; i < paths.length; i += 1) {
+          if (mine !== overviewSeq) return
           const path = paths[i]
           const name = recents.find((r) => r.path === path)?.alias || recents.find((r) => r.path === path)?.name || path
           try {
             const r = await withTimeout(api.reposOverview([path]), 12_000)
+            if (mine !== overviewSeq) return
             if (r.repos[0]) this.overview.push(r.repos[0])
           } catch (e) {
+            if (mine !== overviewSeq) return
             this.overview.push({
               path,
               name,
@@ -1617,21 +1629,33 @@ export const useRepoStore = defineStore('repo', {
           this.overviewProgress = { done: i + 1, total: paths.length }
         }
       } catch (e) {
-        this.overview = []
-        this.notify('err', String((e as Error).message || e))
+        if (mine === overviewSeq) {
+          this.overview = []
+          this.notify('err', String((e as Error).message || e))
+        }
       } finally {
-        this.overviewLoading = false
+        if (mine === overviewSeq) this.overviewLoading = false
       }
     },
 
-    async removeWorktree(target: string, force = false) {
-      if (!this.path) return
+    /** 关闭看板时取消后续统计，避免面板关了还在后台连续跑 git */
+    cancelOverview() {
+      overviewSeq += 1
+      this.overviewLoading = false
+    },
+
+    async removeWorktree(target: string, force = false): Promise<{ ok: boolean; error?: string }> {
+      if (!this.path) return { ok: false, error: '未打开仓库' }
       try {
         await api.removeWorktree(this.path, target, force)
+        await api.worktreeMetaRemove(this.path, target).catch(() => null)
         this.notify('ok', '工作树已移除')
         await this.loadWorktrees()
+        return { ok: true }
       } catch (e) {
-        this.notify('err', String((e as Error).message || e))
+        const msg = String((e as Error).message || e)
+        this.notify('err', msg)
+        return { ok: false, error: msg }
       }
     },
 

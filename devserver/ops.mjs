@@ -699,9 +699,19 @@ export async function listWorktrees(repo) {
 
       if (item.exists && !item.bare) {
         try {
-          const st = await makeGit(wt.path)(['status', '--porcelain=v2', '--branch', '-uno'])
+          const st = await makeGit(wt.path)([
+            'status',
+            '--porcelain=v2',
+            '-z',
+            '--branch',
+            '--untracked-files=normal',
+          ])
           const parsed = parseStatus(st)
-          item.dirty = parsed.staged.length + parsed.unstaged.length + parsed.conflicted.length
+          item.dirty =
+            parsed.staged.length +
+            parsed.unstaged.length +
+            parsed.untracked.length +
+            parsed.conflicted.length
           item.ahead = parsed.ahead
           item.behind = parsed.behind
         } catch {
@@ -748,10 +758,23 @@ export async function addWorktree(repo, opts) {
 export async function removeWorktree(repo, wtPath, force) {
   const target = path.resolve(String(wtPath || ''))
   if (path.resolve(repo) === target) throw new Error('不能移除当前正在使用的工作树')
+  if (!fs.existsSync(target)) {
+    await makeGit(repo)(['worktree', 'prune'])
+    return { ok: true }
+  }
   const args = ['worktree', 'remove']
   if (force) args.push('--force')
   args.push(target)
-  await makeGit(repo)(args)
+  try {
+    await makeGit(repo)(args)
+  } catch (e) {
+    if (/locked/i.test(String(e.message || e))) {
+      await makeGit(repo)(['worktree', 'unlock', target])
+      await makeGit(repo)(args)
+    } else {
+      throw e
+    }
+  }
   return { ok: true }
 }
 
@@ -1241,6 +1264,20 @@ export async function worktreeMetaSet(repo, wtPath, agent, note, task) {
 
 export async function worktreeMetaTouch(repo, wtPath) {
   return worktreeMetaSet(repo, wtPath, undefined, undefined, undefined)
+}
+
+export async function worktreeMetaRemove(repo, wtPath) {
+  const file = metaFile(repo)
+  let all = {}
+  try {
+    all = JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    all = {}
+  }
+  delete all[String(wtPath).replace(/\\/g, '/')]
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(all, null, 2), 'utf8')
+  return { ok: true }
 }
 
 /** 多仓库看板：把给定的仓库路径补上分支/漂移/脏文件/工作树数 */

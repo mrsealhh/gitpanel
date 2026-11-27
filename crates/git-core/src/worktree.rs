@@ -1660,10 +1660,22 @@ impl Repo {
             }
 
             let wt_path = std::path::PathBuf::from(&wt.path);
-            if let Some(st) = git_allow_fail(&wt_path, &["status", "--porcelain=v2", "--branch", "-uno"]) {
+            if let Some(st) = git_allow_fail(
+                &wt_path,
+                &[
+                    "status",
+                    "--porcelain=v2",
+                    "-z",
+                    "--branch",
+                    "--untracked-files=normal",
+                ],
+            ) {
                 let parsed = parse_status(&st);
-                wt.dirty =
-                    (parsed.staged.len() + parsed.unstaged.len() + parsed.conflicted.len()) as u32;
+                // 未跟踪文件也算「不干净」：不然移除时 git 会因未跟踪文件拒绝删除
+                wt.dirty = (parsed.staged.len()
+                    + parsed.unstaged.len()
+                    + parsed.untracked.len()
+                    + parsed.conflicted.len()) as u32;
                 wt.ahead = parsed.ahead;
                 wt.behind = parsed.behind;
             }
@@ -1713,17 +1725,44 @@ impl Repo {
     }
 
     pub fn remove_worktree(&self, target: &str, force: bool) -> Result<()> {
-        let current = norm_path(&self.path().to_string_lossy());
-        if norm_path(target).eq_ignore_ascii_case(&current) {
+        let target_path = std::path::PathBuf::from(target);
+        // 真实路径比较：符号链接 / 大小写 / 正反斜杠都不能影响「是不是当前工作树」的判断
+        let canon = |p: &std::path::Path| -> String {
+            let real = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+            norm_path(&real.to_string_lossy())
+        };
+        if canon(&target_path).eq_ignore_ascii_case(&canon(self.path())) {
             bail!("不能移除当前正在使用的工作树");
         }
+
+        // 目录已经不在了：只是登记残留，直接 prune
+        if !target_path.exists() {
+            git(self.path(), &["worktree", "prune"])?;
+            return Ok(());
+        }
+
         let mut args: Vec<&str> = vec!["worktree", "remove"];
         if force {
             args.push("--force");
         }
         args.push(target);
-        git(self.path(), &args)?;
-        Ok(())
+        match git(self.path(), &args) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // 被 lock 的工作树先解锁再删（例如手动 lock 过）
+                if e.to_string().contains("locked") {
+                    let _ = git(self.path(), &["worktree", "unlock", target]);
+                    let mut retry: Vec<&str> = vec!["worktree", "remove"];
+                    if force {
+                        retry.push("--force");
+                    }
+                    retry.push(target);
+                    git(self.path(), &retry)?;
+                    return Ok(());
+                }
+                Err(e)
+            }
+        }
     }
 
     pub fn prune_worktrees(&self) -> Result<String> {

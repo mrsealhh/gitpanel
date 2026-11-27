@@ -615,6 +615,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/worktree-meta-touch') {
       return send(res, 200, await ops.worktreeMetaTouch(body.path, body.wtPath))
     }
+    if (url.pathname === '/api/worktree-meta-remove') {
+      return send(res, 200, await ops.worktreeMetaRemove(body.path, body.wtPath))
+    }
     if (url.pathname === '/api/repos-overview') {
       return send(res, 200, await ops.reposOverview(body.paths))
     }

@@ -77,6 +77,8 @@ const detailTabOpen = ref(false)
 const maximized = ref(false)
 const diffFullscreen = ref(false)
 const showWorktreeDialog = ref(false)
+/** 从分支右键打开新建工作树时带入的预填信息 */
+const worktreePreset = ref<{ base?: string; branch?: string; newBranch?: boolean } | null>(null)
 const showRemotes = ref(false)
 const showRepoManager = ref(false)
 const showDashboard = ref(false)
@@ -455,7 +457,10 @@ function onKey(e: KeyboardEvent) {
     else if (showHunks.value) showHunks.value = null
     else if (repo.logOpen) repo.logOpen = false
     else if (repo.compareOpen) repo.closeCompare()
-    else if (showWorktreeDialog.value) showWorktreeDialog.value = false
+    else if (showWorktreeDialog.value) {
+      showWorktreeDialog.value = false
+      worktreePreset.value = null
+    }
     else if (repo.commandOutput) repo.closeCommandOutput()
     else if (repo.stashDiff) repo.closeStashDiff()
     else if (repo.activeTab) closeActiveDoc()
@@ -601,6 +606,7 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
     : isRemote
       ? [
           { id: 'new-branch', label: '从此远端分支新建本地分支…' },
+          { id: 'worktree-new', label: '从此分支新建工作树…' },
           { id: 'checkout', label: '签出为本地分支（自动跟踪）' },
           { id: 'compare', label: '与当前 HEAD 对比' },
           { id: 'divider', label: '', divider: true },
@@ -611,6 +617,8 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
         ]
       : [
           { id: 'new-branch', label: '从此分支新建分支…' },
+          { id: 'worktree-new', label: '从此分支新建工作树…' },
+          ...(ref.name !== repo.info?.branch ? [{ id: 'worktree-checkout', label: '检出此分支到新工作树…' }] : []),
           { id: 'checkout', label: '检出此分支' },
           { id: 'merge', label: '合并到当前分支' },
           { id: 'rebase-onto', label: '交互式 rebase 到此分支' },
@@ -640,7 +648,14 @@ function onRefContext({ ref, x, y }: { ref: RepoRef; x: number; y: number }) {
           onSubmit: (name) => repo.createBranch(name, ref.name),
         }
       } else if (id === 'checkout') await repo.checkoutRef(ref.name)
-      else if (id === 'compare') await repo.openCompare(ref.name, 'HEAD')
+      else if (id === 'worktree-new') {
+        const short = ref.name.replace(/^origin\//, '')
+        worktreePreset.value = { base: ref.name, branch: `${short}-wt`, newBranch: true }
+        showWorktreeDialog.value = true
+      } else if (id === 'worktree-checkout') {
+        worktreePreset.value = { base: ref.name, branch: ref.name, newBranch: false }
+        showWorktreeDialog.value = true
+      } else if (id === 'compare') await repo.openCompare(ref.name, 'HEAD')
       else if (id === 'delete-remote') {
         if (settings.confirmDangerous && !window.confirm(`确定删除远端分支 ${ref.name}？\n会执行 git push --delete。`)) return
         await repo.deleteRemoteBranch(ref.name)
@@ -812,8 +827,9 @@ function openCreateStash() {
   }
 }
 
-/** 为 AI 并行会话开一个独立工作副本 */
+/** 为 AI 并行会话开一个独立工作副本（可带入分支右键的预填信息） */
 function openCreateWorktree() {
+  worktreePreset.value = null
   showWorktreeDialog.value = true
 }
 
@@ -831,6 +847,13 @@ function onSetWorktreeAgent(wtPath: string) {
 
 /** 打开工作树：先记一次「最后活动」，再切仓库 */
 async function openWorktree(path: string) {
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  if (repo.path && norm(repo.path) === norm(path)) return
+  const wt = repo.worktrees.find((w) => norm(w.path) === norm(path))
+  if (wt && !wt.exists) {
+    repo.notify('err', '这个工作树的目录已经不在了，可以点「清理」移除登记')
+    return
+  }
   await repo.touchWorktree(path)
   openPath(path)
 }
@@ -1534,7 +1557,13 @@ onBeforeUnmount(() => {
       @close="showHunks = null"
     />
     <LogModal v-if="repo.logOpen" @close="repo.logOpen = false" />
-    <WorktreeDialog v-if="showWorktreeDialog" @close="showWorktreeDialog = false" />
+    <WorktreeDialog
+      v-if="showWorktreeDialog"
+      :base="worktreePreset?.base"
+      :branch="worktreePreset?.branch"
+      :new-branch="worktreePreset?.newBranch"
+      @close="showWorktreeDialog = false; worktreePreset = null"
+    />
     <RemoteDialog v-if="showRemotes" @close="showRemotes = false" />
     <RepoManagerDialog v-if="showRepoManager" @close="showRepoManager = false" />
     <CommandPalette

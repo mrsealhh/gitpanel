@@ -17,9 +17,15 @@ use tauri::{AppHandle, Manager, WindowEvent};
 
 /// 单一 RPC 入口：前端 `invoke('git_call', { cmd, payload })`，
 /// cmd 与 devserver 的 /api/<cmd> 一一对应，payload 与 HTTP body 同构。
+///
+/// 注意：必须是 async + spawn_blocking。git / 文件 IO 都是阻塞操作，
+/// 同步命令会占住 WebView 的 IPC 主线程，仓库一大整窗就会卡死。
 #[tauri::command]
-fn git_call(cmd: String, payload: Value) -> Result<Value, String> {
-    dispatch(&cmd, payload).map_err(|e| e.to_string())
+async fn git_call(cmd: String, payload: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || dispatch(&cmd, payload))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 fn s(p: &Value, k: &str) -> String {
@@ -741,9 +747,15 @@ fn project_rename(path: String, alias: String, db: tauri::State<Db>) -> Result<S
     Ok(final_name)
 }
 
-/// 克隆仓库到指定目录
+/// 克隆仓库到指定目录（网络 + 全量检出，必须放到阻塞线程，避免卡住窗口）
 #[tauri::command]
-fn clone_repo(url: String, target: String) -> Result<String, String> {
+async fn clone_repo(url: String, target: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || clone_repo_blocking(url, target))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn clone_repo_blocking(url: String, target: String) -> Result<String, String> {
     let u = url.trim();
     if !(u.starts_with("https://") || u.starts_with("http://") || u.starts_with("git@") || u.starts_with("ssh://")) {
         return Err("只支持 http(s) / ssh / git@ 形式的仓库地址".into());
@@ -951,7 +963,13 @@ fn scan_walk(
 
 /// 扫描文件夹里的 Git 仓库，并按相对目录生成最多三级分组
 #[tauri::command]
-fn scan_repos(root: String, max_depth: Option<u32>) -> Result<Vec<ScannedRepo>, String> {
+async fn scan_repos(root: String, max_depth: Option<u32>) -> Result<Vec<ScannedRepo>, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_repos_blocking(root, max_depth))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn scan_repos_blocking(root: String, max_depth: Option<u32>) -> Result<Vec<ScannedRepo>, String> {
     let root_path = std::path::PathBuf::from(root.trim());
     if !root_path.is_dir() {
         return Err("请选择一个文件夹".into());
@@ -1057,6 +1075,15 @@ fn worktree_meta_touch(path: String, db: tauri::State<Db>) -> Result<(), String>
     Ok(())
 }
 
+/// 工作树被移除后清掉它的 Agent / 任务备注，避免同路径重建时串数据
+#[tauri::command]
+fn worktree_meta_remove(path: String, db: tauri::State<Db>) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM worktree_meta WHERE path = ?1", rusqlite::params![path])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /* ─────────────── 多仓库看板 ─────────────── */
 
 #[derive(Serialize)]
@@ -1075,7 +1102,14 @@ struct RepoOverview {
 }
 
 #[tauri::command]
-fn repos_overview(paths: Vec<String>) -> Vec<RepoOverview> {
+async fn repos_overview(paths: Vec<String>) -> Vec<RepoOverview> {
+    // 逐个仓库做 libgit2 状态扫描可能很慢，放到阻塞线程池，避免卡住窗口
+    tauri::async_runtime::spawn_blocking(move || repos_overview_blocking(paths))
+        .await
+        .unwrap_or_default()
+}
+
+fn repos_overview_blocking(paths: Vec<String>) -> Vec<RepoOverview> {
     paths
         .into_iter()
         .take(20)
@@ -1301,6 +1335,7 @@ fn main() {
             copy_text,            worktree_meta_list,
             worktree_meta_set,
             worktree_meta_touch,
+            worktree_meta_remove,
             repos_overview,
             project_rename,
             project_organize,

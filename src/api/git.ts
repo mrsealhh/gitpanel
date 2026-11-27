@@ -376,6 +376,12 @@ export const api = {
     }
     return post<{ ok: boolean }>('/api/worktree-meta-touch', { path, wtPath })
   },
+  worktreeMetaRemove(path: string, wtPath: string): Promise<{ ok: boolean }> {
+    if (isTauri) {
+      return invoke('worktree_meta_remove', { path: wtPath }).then(() => ({ ok: true }))
+    }
+    return post<{ ok: boolean }>('/api/worktree-meta-remove', { path, wtPath })
+  },
   reposOverview(paths: string[]): Promise<{ repos: RepoOverview[] }> {
     // 桌面态走独立 Tauri 命令；它没有当前仓库 path，不能走通用 git_call
     if (isTauri) {
